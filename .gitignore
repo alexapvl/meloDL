@@ -1,0 +1,10 @@
+meloDL/ffmpeg
+meloDL/ffprobe
+meloDL/yt-dlp
+.DS_Store
+xcuserdata/
+build/
+*.xcarchive
+.derivedData/
+*.xcresult
+*.xcresult/
