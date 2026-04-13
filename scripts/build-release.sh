@@ -19,6 +19,8 @@ SCHEME="meloDL"
 ARCHIVE_PATH="$BUILD_DIR/$SCHEME.xcarchive"
 APP_PATH="$BUILD_DIR/$SCHEME.app"
 DMG_PATH="$BUILD_DIR/$SCHEME.dmg"
+DMG_STAGING_DIR="$BUILD_DIR/dmg-staging"
+TEAM_ID="THZ82CJTKM"
 NOTARIZE=false
 
 if [[ "${1:-}" == "--notarize" ]]; then
@@ -51,19 +53,77 @@ xcodebuild -exportArchive \
     -exportOptionsPlist "$PROJECT_DIR/exportOptions.plist" \
     -quiet
 
+echo "==> Re-signing bundled executables with hardened runtime..."
+SIGNING_IDENTITY_HASH="${SIGNING_IDENTITY_HASH:-}"
+if [[ -z "$SIGNING_IDENTITY_HASH" ]]; then
+    SIGNING_IDENTITY_HASH="$(
+        security find-identity -v -p codesigning \
+        | grep -E "Developer ID Application: .*\\($TEAM_ID\\)" \
+        | awk 'NR==1 {print $2}'
+    )"
+fi
+
+if [[ -z "$SIGNING_IDENTITY_HASH" ]]; then
+    echo "ERROR: Could not find a Developer ID Application signing identity for team $TEAM_ID."
+    echo "Set SIGNING_IDENTITY_HASH explicitly if needed."
+    exit 1
+fi
+
+for binary in ffmpeg ffprobe yt-dlp; do
+    binary_path="$APP_PATH/Contents/Resources/$binary"
+    if [[ -f "$binary_path" ]]; then
+        codesign --force --timestamp --options runtime --sign "$SIGNING_IDENTITY_HASH" "$binary_path"
+    else
+        echo "WARNING: Expected bundled binary not found: $binary_path"
+    fi
+done
+
+codesign --force --timestamp --options runtime --preserve-metadata=entitlements --sign "$SIGNING_IDENTITY_HASH" "$APP_PATH"
+codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+
 echo "==> Creating DMG..."
-hdiutil create \
-    -volname "$SCHEME" \
-    -srcfolder "$APP_PATH" \
-    -ov \
-    -format UDZO \
-    "$DMG_PATH"
+# Create a drag-and-drop installer layout.
+rm -rf "$DMG_STAGING_DIR"
+mkdir -p "$DMG_STAGING_DIR"
+cp -R "$APP_PATH" "$DMG_STAGING_DIR/"
+
+if command -v create-dmg >/dev/null 2>&1; then
+    # Let create-dmg create its own Applications link (--app-drop-link).
+    create-dmg \
+        --volname "$SCHEME" \
+        --window-pos 200 120 \
+        --window-size 640 400 \
+        --icon-size 128 \
+        --icon "$SCHEME.app" 170 185 \
+        --hide-extension "$SCHEME.app" \
+        --app-drop-link 470 185 \
+        "$DMG_PATH" \
+        "$DMG_STAGING_DIR"
+else
+    # Fallback: plain DMG with manual Applications symlink.
+    ln -s /Applications "$DMG_STAGING_DIR/Applications"
+    hdiutil create \
+        -volname "$SCHEME" \
+        -srcfolder "$DMG_STAGING_DIR" \
+        -ov \
+        -format UDZO \
+        "$DMG_PATH"
+fi
 
 if $NOTARIZE; then
     echo "==> Notarizing DMG..."
-    xcrun notarytool submit "$DMG_PATH" \
+    NOTARY_OUTPUT="$(
+        xcrun notarytool submit "$DMG_PATH" \
         --keychain-profile "meloDL-notarize" \
         --wait
+    )"
+    printf '%s\n' "$NOTARY_OUTPUT"
+
+    if ! printf '%s\n' "$NOTARY_OUTPUT" | grep -q "status: Accepted"; then
+        echo "ERROR: Notarization was not accepted. Skipping stapling."
+        echo "Run: xcrun notarytool log <submission-id> --keychain-profile meloDL-notarize"
+        exit 1
+    fi
 
     echo "==> Stapling notarization ticket..."
     xcrun stapler staple "$DMG_PATH"
