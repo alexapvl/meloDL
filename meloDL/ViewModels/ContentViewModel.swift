@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import SwiftUI
 import os
@@ -5,42 +6,28 @@ import os
 @MainActor
 class ContentViewModel: ObservableObject {
     @Published var url: String = ""
-    @Published var audioSettings = AudioSettings()
-    @Published var downloadConfiguration = DownloadConfiguration()
-    @Published var fileService = FileService()
-
     @Published var downloads: [DownloadItem] = []
     @Published var statusMessage: String = "Idle"
     @Published var isDownloading: Bool = false
-
     @Published var ytdlpVersion: String?
     @Published var ffmpegVersion: String?
     @Published var binaryUpdateStatus: String?
 
+    let appSettings: AppSettings
+
     private let downloadEngine = DownloadEngine()
     private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "com.alexapvl.meloDL", category: "ContentViewModel")
-    private let defaults = UserDefaults.standard
     private var activeDownloadTask: Task<Void, Never>?
     private var playlistTotalCount = 0
-
-    private enum DefaultsKeys {
-        static let audioFormat = "settings.audioFormat"
-        static let audioQuality = "settings.audioQuality"
-        static let embedMetadata = "settings.embedMetadata"
-        static let embedThumbnail = "settings.embedThumbnail"
-        static let fastDownloads = "settings.fastDownloads"
-        static let downloadFolderPath = "settings.downloadFolderPath"
-    }
-
     private var downloadRequestedAt: Date?
     private var startupLogged = false
 
-    init() {
-        loadPersistedSettings()
+    init(appSettings: AppSettings) {
+        self.appSettings = appSettings
     }
 
     var canDownload: Bool {
-        !url.isEmptyOrWhitespace && fileService.selectedFolder != nil && !isDownloading
+        !url.isEmptyOrWhitespace && !isDownloading
     }
 
     var statusColor: Color {
@@ -58,47 +45,6 @@ class ContentViewModel: ObservableObject {
     func onAppear() {
         Task {
             await bootstrapBinaries()
-        }
-    }
-
-    func persistAudioSettings() {
-        defaults.set(audioSettings.format.rawValue, forKey: DefaultsKeys.audioFormat)
-        defaults.set(audioSettings.quality.rawValue, forKey: DefaultsKeys.audioQuality)
-        defaults.set(audioSettings.embedMetadata, forKey: DefaultsKeys.embedMetadata)
-        defaults.set(audioSettings.embedThumbnail, forKey: DefaultsKeys.embedThumbnail)
-    }
-
-    func persistDownloadSettings() {
-        defaults.set(downloadConfiguration.fastDownloads, forKey: DefaultsKeys.fastDownloads)
-    }
-
-    func persistSelectedFolder() {
-        defaults.set(fileService.selectedFolder?.path, forKey: DefaultsKeys.downloadFolderPath)
-    }
-
-    private func loadPersistedSettings() {
-        if let raw = defaults.string(forKey: DefaultsKeys.audioFormat),
-           let format = AudioFormat(rawValue: raw) {
-            audioSettings.format = format
-        }
-
-        if let raw = defaults.string(forKey: DefaultsKeys.audioQuality),
-           let quality = AudioQuality(rawValue: raw) {
-            audioSettings.quality = quality
-        }
-
-        if defaults.object(forKey: DefaultsKeys.embedMetadata) != nil {
-            audioSettings.embedMetadata = defaults.bool(forKey: DefaultsKeys.embedMetadata)
-        }
-        if defaults.object(forKey: DefaultsKeys.embedThumbnail) != nil {
-            audioSettings.embedThumbnail = defaults.bool(forKey: DefaultsKeys.embedThumbnail)
-        }
-        if defaults.object(forKey: DefaultsKeys.fastDownloads) != nil {
-            downloadConfiguration.fastDownloads = defaults.bool(forKey: DefaultsKeys.fastDownloads)
-        }
-
-        if let path = defaults.string(forKey: DefaultsKeys.downloadFolderPath), !path.isEmpty {
-            fileService.selectedFolder = URL(fileURLWithPath: path, isDirectory: true)
         }
     }
 
@@ -142,14 +88,11 @@ class ContentViewModel: ObservableObject {
         guard canDownload else {
             if url.isEmptyOrWhitespace {
                 statusMessage = "Please enter a URL."
-            } else if fileService.selectedFolder == nil {
-                statusMessage = "Please select a download folder."
             }
             return
         }
 
         isDownloading = true
-        downloadConfiguration.outputFolder = fileService.selectedFolder
         downloadRequestedAt = Date()
         startupLogged = false
         playlistTotalCount = 0
@@ -202,8 +145,8 @@ class ContentViewModel: ObservableObject {
             do {
                 let stream = downloadEngine.download(
                     url: downloadURL,
-                    config: downloadConfiguration,
-                    audioSettings: audioSettings,
+                    config: appSettings.downloadConfiguration,
+                    audioSettings: appSettings.audioSettings,
                     preloadedTitle: preloadedTitle,
                     deferTitleResolution: deferTitleResolution
                 )
@@ -217,6 +160,7 @@ class ContentViewModel: ObservableObject {
                     statusMessage = "Error: \(error.localizedDescription)"
                 }
             }
+            maybeOpenDownloadFolderIfNeeded()
             isDownloading = false
             activeDownloadTask = nil
         }
@@ -231,8 +175,8 @@ class ContentViewModel: ObservableObject {
             do {
                 let stream = downloadEngine.downloadPlaylist(
                     url: downloadURL,
-                    config: downloadConfiguration,
-                    audioSettings: audioSettings,
+                    config: appSettings.downloadConfiguration,
+                    audioSettings: appSettings.audioSettings,
                     prefetchedEntries: prefetchedEntries
                 )
                 for try await event in stream {
@@ -243,6 +187,7 @@ class ContentViewModel: ObservableObject {
                     return false
                 }.count
                 statusMessage = "\(completedCount)/\(downloads.count) tracks downloaded"
+                maybeOpenDownloadFolderIfNeeded()
             } catch {
                 if Task.isCancelled {
                     statusMessage = "Cancelled"
@@ -346,5 +291,15 @@ class ContentViewModel: ObservableObject {
             return nil
         }
         return (completed, total)
+    }
+
+    private func maybeOpenDownloadFolderIfNeeded() {
+        guard appSettings.openFolderOnSuccess else { return }
+        let hasCompletedItems = downloads.contains { item in
+            if case .completed = item.status { return true }
+            return false
+        }
+        guard hasCompletedItems else { return }
+        NSWorkspace.shared.open(appSettings.downloadFolderURL)
     }
 }

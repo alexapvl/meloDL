@@ -1,7 +1,13 @@
 import SwiftUI
 
 struct ContentView: View {
-    @StateObject private var viewModel = ContentViewModel()
+    @ObservedObject private var appSettings: AppSettings
+    @StateObject private var viewModel: ContentViewModel
+
+    init(appSettings: AppSettings) {
+        self.appSettings = appSettings
+        _viewModel = StateObject(wrappedValue: ContentViewModel(appSettings: appSettings))
+    }
 
     var body: some View {
         VStack(spacing: 20) {
@@ -16,18 +22,8 @@ struct ContentView: View {
                     isDisabled: viewModel.isDownloading
                 )
 
-                FolderSelectionView(
-                    fileService: viewModel.fileService,
-                    isDisabled: viewModel.isDownloading
-                )
-
                 FormatPickerView(
-                    audioSettings: $viewModel.audioSettings,
-                    isDisabled: viewModel.isDownloading
-                )
-
-                FastDownloadSettingsView(
-                    downloadConfiguration: $viewModel.downloadConfiguration,
+                    format: $appSettings.format,
                     isDisabled: viewModel.isDownloading
                 )
 
@@ -57,24 +53,6 @@ struct ContentView: View {
         }
         .frame(minWidth: 580, minHeight: 600)
         .onAppear { viewModel.onAppear() }
-        .onChange(of: viewModel.audioSettings.format) { _, _ in
-            viewModel.persistAudioSettings()
-        }
-        .onChange(of: viewModel.audioSettings.quality) { _, _ in
-            viewModel.persistAudioSettings()
-        }
-        .onChange(of: viewModel.audioSettings.embedMetadata) { _, _ in
-            viewModel.persistAudioSettings()
-        }
-        .onChange(of: viewModel.audioSettings.embedThumbnail) { _, _ in
-            viewModel.persistAudioSettings()
-        }
-        .onChange(of: viewModel.downloadConfiguration.fastDownloads) { _, _ in
-            viewModel.persistDownloadSettings()
-        }
-        .onChange(of: viewModel.fileService.selectedFolder) { _, _ in
-            viewModel.persistSelectedFolder()
-        }
     }
 }
 

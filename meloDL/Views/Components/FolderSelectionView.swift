@@ -4,27 +4,25 @@ import UniformTypeIdentifiers
 struct FolderSelectionView: View {
     @ObservedObject var fileService: FileService
     let isDisabled: Bool
+    let onFolderSelected: (URL?) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text("Download folder:")
-                .font(.headline)
+        HStack(spacing: 10) {
+            Text(fileService.selectedFolder?.path ?? "No folder selected")
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .foregroundStyle(fileService.selectedFolder == nil ? .secondary : .primary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .background(Color(.controlBackgroundColor))
+                .clipShape(.rect(cornerRadius: 6))
+                .frame(maxWidth: .infinity, alignment: .leading)
 
-            HStack {
-                Text(fileService.selectedFolder?.path ?? "No folder selected")
-                    .foregroundStyle(fileService.selectedFolder == nil ? .secondary : .primary)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
-                    .background(Color(.controlBackgroundColor))
-                    .cornerRadius(6)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                Button("Choose Folder") {
-                    fileService.selectFolder()
-                }
-                .disabled(isDisabled)
-                .buttonStyle(.bordered)
+            Button("Choose Folder") {
+                fileService.selectFolder()
             }
+            .disabled(isDisabled)
+            .buttonStyle(.bordered)
         }
         .fileImporter(
             isPresented: $fileService.showingFolderPicker,
@@ -32,11 +30,12 @@ struct FolderSelectionView: View {
             allowsMultipleSelection: false
         ) { result in
             _ = fileService.handleFolderSelection(result: result)
+            onFolderSelected(fileService.selectedFolder)
         }
     }
 }
 
 #Preview {
-    FolderSelectionView(fileService: FileService(), isDisabled: false)
+    FolderSelectionView(fileService: FileService(), isDisabled: false) { _ in }
         .padding()
 }
