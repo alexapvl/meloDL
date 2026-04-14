@@ -16,6 +16,10 @@ struct meloDLApp: App {
             ContentView(appSettings: appSettings)
         }
         .commands {
+            CommandGroup(replacing: .newItem) {
+                // Intentionally empty to disable Command-N new window.
+            }
+
             CommandGroup(after: .appInfo) {
                 CheckForUpdatesView(updater: updaterController.updater)
             }
