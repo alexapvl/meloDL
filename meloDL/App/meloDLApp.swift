@@ -13,7 +13,10 @@ struct meloDLApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView(appSettings: appSettings)
+            ContentView(
+                appSettings: appSettings,
+                onCheckAppUpdates: checkForAppUpdates
+            )
         }
         .commands {
             CommandGroup(replacing: .newItem) {
@@ -21,7 +24,7 @@ struct meloDLApp: App {
             }
 
             CommandGroup(after: .appInfo) {
-                CheckForUpdatesView(updater: updaterController.updater)
+                Button("Check for Updates...", action: checkForAllUpdates)
             }
         }
 
@@ -32,29 +35,17 @@ struct meloDLApp: App {
             )
         }
     }
-}
 
-struct CheckForUpdatesView: View {
-    @ObservedObject private var checkForUpdatesViewModel: CheckForUpdatesViewModel
-
-    init(updater: SPUUpdater) {
-        self.checkForUpdatesViewModel = CheckForUpdatesViewModel(updater: updater)
+    private func checkForAppUpdates() {
+        guard updaterController.updater.canCheckForUpdates else { return }
+        updaterController.updater.checkForUpdates()
     }
 
-    var body: some View {
-        Button("Check for App Updates...", action: checkForUpdatesViewModel.updater.checkForUpdates)
-            .disabled(!checkForUpdatesViewModel.canCheckForUpdates)
-    }
-}
-
-final class CheckForUpdatesViewModel: ObservableObject {
-    @Published var canCheckForUpdates = false
-    let updater: SPUUpdater
-
-    init(updater: SPUUpdater) {
-        self.updater = updater
-        updater.publisher(for: \.canCheckForUpdates)
-            .assign(to: &$canCheckForUpdates)
+    private func checkForAllUpdates() {
+        checkForAppUpdates()
+        Task.detached(priority: .utility) {
+            await GitHubUpdateService.shared.checkForUpdates()
+        }
     }
 }
 

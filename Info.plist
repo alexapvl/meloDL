@@ -4,6 +4,8 @@
 <dict>
 	<key>SUFeedURL</key>
 	<string>https://raw.githubusercontent.com/alexapvl/meloDL/main/appcast.xml</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
 	<key>SUPublicEDKey</key>
 	<string>cbvM8EZvG1cwYYb7cm2SvuHKtbtdhiJju7/2x6dCnrA=</string>
 </dict>

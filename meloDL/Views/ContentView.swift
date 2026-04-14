@@ -3,9 +3,11 @@ import SwiftUI
 struct ContentView: View {
     @ObservedObject private var appSettings: AppSettings
     @StateObject private var viewModel: ContentViewModel
+    private let onCheckAppUpdates: () -> Void
 
-    init(appSettings: AppSettings) {
+    init(appSettings: AppSettings, onCheckAppUpdates: @escaping () -> Void) {
         self.appSettings = appSettings
+        self.onCheckAppUpdates = onCheckAppUpdates
         _viewModel = StateObject(wrappedValue: ContentViewModel(appSettings: appSettings))
     }
 
@@ -22,10 +24,20 @@ struct ContentView: View {
                     isDisabled: viewModel.isDownloading
                 )
 
-                FormatPickerView(
-                    format: $appSettings.format,
-                    isDisabled: viewModel.isDownloading
-                )
+                HStack(alignment: .bottom, spacing: 10) {
+                    FormatPickerView(
+                        format: $appSettings.format,
+                        isDisabled: viewModel.isDownloading
+                    )
+
+                    Spacer(minLength: 0)
+
+                    SettingsLink {
+                        Label("Advanced Settings", systemImage: "slider.horizontal.3")
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(viewModel.isDownloading)
+                }
 
                 DownloadButtonView(
                     isDownloading: viewModel.isDownloading,
@@ -48,7 +60,9 @@ struct ContentView: View {
                 ytdlpVersion: viewModel.ytdlpVersion,
                 ffmpegVersion: viewModel.ffmpegVersion,
                 updateStatus: viewModel.binaryUpdateStatus,
-                onCheckUpdates: viewModel.checkForBinaryUpdates
+                onCheckUpdates: {
+                    viewModel.checkForAllUpdates(checkForAppUpdates: onCheckAppUpdates)
+                }
             )
         }
         .frame(minWidth: 580, minHeight: 600)
@@ -88,7 +102,7 @@ struct BinaryVersionBar: View {
                     .font(.caption)
             }
             .buttonStyle(.borderless)
-            .help("Check for binary updates")
+            .help("Check for app and binary updates")
         }
         .padding(.horizontal)
         .padding(.bottom, 8)

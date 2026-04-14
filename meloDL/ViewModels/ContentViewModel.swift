@@ -69,8 +69,9 @@ class ContentViewModel: ObservableObject {
         }
     }
 
-    func checkForBinaryUpdates() {
+    func checkForAllUpdates(checkForAppUpdates: () -> Void) {
         binaryUpdateStatus = "Checking..."
+        checkForAppUpdates()
         Task.detached(priority: .utility) {
             await GitHubUpdateService.shared.checkForUpdates()
             let versions = await BinaryManager.shared.versions
