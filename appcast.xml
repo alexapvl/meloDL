@@ -4,11 +4,11 @@
         <title>meloDL</title>
         <item>
             <title>1.0</title>
-            <pubDate>Mon, 13 Apr 2026 18:39:46 +0300</pubDate>
+            <pubDate>Tue, 14 Apr 2026 19:33:14 +0300</pubDate>
             <sparkle:version>1</sparkle:version>
             <sparkle:shortVersionString>1.0</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>15.5</sparkle:minimumSystemVersion>
-            <enclosure url="https://github.com/alexapvl/meloDL/releases/download/v1.0.0/meloDL.dmg" length="91809896" type="application/octet-stream" sparkle:edSignature="4VDNvgSnZpjxdOb5UHwQIXJL7ODazofrz/uNQJBARQr2p5qCGCVnpEt0F0ssRJo+ukSAJLULcJtW+skaXu97CQ=="/>
+            <enclosure url="https://github.com/alexapvl/meloDL/releases/download/v1.0.1/meloDL.dmg" length="91811278" type="application/octet-stream" sparkle:edSignature="IuiHHD7k9b7jazD/fsfN12d+lJV7VGefdxiPZgLA9RuHEguhpgtm7F6QRkfzrVeYg7Ym2tK2MOT7ZSBiQXf7BA=="/>
         </item>
     </channel>
 </rss>
