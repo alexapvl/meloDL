@@ -277,6 +277,14 @@ struct AboutSettingsView: View {
                                 .foregroundStyle(.blue)
                         }
                         .font(.body)
+
+                        HStack(spacing: 0) {
+                            Text("Supported links: ")
+                                .foregroundStyle(.secondary)
+                            Link("yt-dlp supported sites", destination: URL(string: "https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md")!)
+                                .foregroundStyle(.blue)
+                        }
+                        .font(.body)
                     }
                 }
             }
