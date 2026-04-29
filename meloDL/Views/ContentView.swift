@@ -21,7 +21,8 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 15) {
                 URLInputView(
                     url: $viewModel.url,
-                    isDisabled: viewModel.isDownloading
+                    isDisabled: viewModel.isDownloading,
+                    onSubmitDownload: viewModel.downloadVideo
                 )
 
                 HStack(alignment: .bottom, spacing: 10) {
