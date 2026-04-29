@@ -36,7 +36,7 @@ class ContentViewModel: ObservableObject {
         if let progress = parsePlaylistProgress(statusMessage) {
             return progress.completed == progress.total ? .green : .secondary
         }
-        if statusMessage.hasPrefix("Downloaded") { return .green }
+        if statusMessage.hasPrefix("Download finished") { return .green }
         return .secondary
     }
 
@@ -238,7 +238,7 @@ class ContentViewModel: ObservableObject {
                 downloads[idx].status = .completed(filepath: filepath)
             }
             if playlistTotalCount <= 1 {
-                statusMessage = "Downloaded \(URL(fileURLWithPath: filepath).lastPathComponent)"
+                statusMessage = "Download finished"
             }
 
         case .error(let sourceURL, let msg, _):
