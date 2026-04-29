@@ -6,13 +6,24 @@
     {
       "layers" : [
         {
-          "image-name" : "meloDL.svg",
-          "name" : "meloDL",
+          "glass" : true,
+          "image-name" : "logo.svg",
+          "name" : "logo",
           "position-specializations" : [
             {
               "idiom" : "square",
               "value" : {
-                "scale" : 1.1,
+                "scale" : 18,
+                "translation-in-points" : [
+                  0,
+                  0
+                ]
+              }
+            },
+            {
+              "idiom" : "watchOS",
+              "value" : {
+                "scale" : 17,
                 "translation-in-points" : [
                   0,
                   0
