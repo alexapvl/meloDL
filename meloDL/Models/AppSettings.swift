@@ -20,6 +20,9 @@ final class AppSettings: ObservableObject {
     @Published var openFolderOnSuccess: Bool {
         didSet { defaults.set(openFolderOnSuccess, forKey: Keys.openFolderOnSuccess) }
     }
+    @Published var notifyOnDownloadCompletion: Bool {
+        didSet { defaults.set(notifyOnDownloadCompletion, forKey: Keys.notifyOnDownloadCompletion) }
+    }
     @Published var downloadFolderPath: String {
         didSet { defaults.set(downloadFolderPath, forKey: Keys.downloadFolderPath) }
     }
@@ -65,6 +68,12 @@ final class AppSettings: ObservableObject {
             openFolderOnSuccess = false
         }
 
+        if defaults.object(forKey: Keys.notifyOnDownloadCompletion) != nil {
+            notifyOnDownloadCompletion = defaults.bool(forKey: Keys.notifyOnDownloadCompletion)
+        } else {
+            notifyOnDownloadCompletion = true
+        }
+
         let persistedPath = defaults.string(forKey: Keys.downloadFolderPath) ?? ""
         if persistedPath.isEmpty {
             downloadFolderPath = DownloadConfiguration.defaultDownloadFolder.path
@@ -101,5 +110,6 @@ final class AppSettings: ObservableObject {
         static let fastDownloads = "settings.fastDownloads"
         static let downloadFolderPath = "settings.downloadFolderPath"
         static let openFolderOnSuccess = "settings.openFolderOnSuccess"
+        static let notifyOnDownloadCompletion = "settings.notifyOnDownloadCompletion"
     }
 }

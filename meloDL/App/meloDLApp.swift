@@ -1,15 +1,22 @@
 import AppKit
 import SwiftUI
 import Sparkle
+import UserNotifications
 
 @main
 struct meloDLApp: App {
     @StateObject private var appSettings = AppSettings()
+    private let notificationDelegate = DownloadNotificationCenterDelegate()
     private let updaterController = SPUStandardUpdaterController(
         startingUpdater: true,
         updaterDelegate: nil,
         userDriverDelegate: nil
     )
+
+    init() {
+        UNUserNotificationCenter.current().delegate = notificationDelegate
+        DownloadNotificationService.shared.configureNotificationCategories()
+    }
 
     var body: some Scene {
         WindowGroup {
@@ -46,6 +53,23 @@ struct meloDLApp: App {
         Task.detached(priority: .utility) {
             await GitHubUpdateService.shared.checkForUpdates()
         }
+    }
+}
+
+private final class DownloadNotificationCenterDelegate: NSObject, UNUserNotificationCenterDelegate {
+    func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                didReceive response: UNNotificationResponse,
+                                withCompletionHandler completionHandler: @escaping () -> Void) {
+        Task { @MainActor in
+            DownloadNotificationService.shared.handleNotificationResponse(response)
+        }
+        completionHandler()
+    }
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                willPresent notification: UNNotification,
+                                withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        completionHandler([.banner, .sound])
     }
 }
 
@@ -216,6 +240,7 @@ struct DownloadsSettingsView: View {
                     VStack(alignment: .leading, spacing: SettingsLayout.rowSpacing) {
                         Toggle("Fast downloads", isOn: $appSettings.fastDownloads)
                         Toggle("Open download folder after successful batch", isOn: $appSettings.openFolderOnSuccess)
+                        Toggle("Show notification when download finishes", isOn: $appSettings.notifyOnDownloadCompletion)
                     }
                 }
             }

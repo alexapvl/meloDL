@@ -188,6 +188,7 @@ class ContentViewModel: ObservableObject {
                     return false
                 }.count
                 statusMessage = "\(completedCount)/\(downloads.count) tracks downloaded"
+                maybeSendCompletionNotification()
                 maybeOpenDownloadFolderIfNeeded()
             } catch {
                 if Task.isCancelled {
@@ -239,6 +240,7 @@ class ContentViewModel: ObservableObject {
             }
             if playlistTotalCount <= 1 {
                 statusMessage = "Download finished"
+                maybeSendCompletionNotification()
             }
 
         case .error(let sourceURL, let msg, _):
@@ -302,5 +304,10 @@ class ContentViewModel: ObservableObject {
         }
         guard hasCompletedItems else { return }
         NSWorkspace.shared.open(appSettings.downloadFolderURL)
+    }
+
+    private func maybeSendCompletionNotification() {
+        guard appSettings.notifyOnDownloadCompletion else { return }
+        DownloadNotificationService.shared.postDownloadFinishedNotification(folderURL: appSettings.downloadFolderURL)
     }
 }
