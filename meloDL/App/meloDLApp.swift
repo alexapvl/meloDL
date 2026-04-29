@@ -84,6 +84,14 @@ struct SettingsView: View {
     }
 }
 
+private enum SettingsLayout {
+    static let pagePadding: CGFloat = 20
+    static let pageSpacing: CGFloat = 18
+    static let sectionSpacing: CGFloat = 10
+    static let rowSpacing: CGFloat = 8
+    static let subordinateIndent: CGFloat = 18
+}
+
 private struct SettingsPage<Content: View>: View {
     let title: String
     let subtitle: String?
@@ -96,20 +104,22 @@ private struct SettingsPage<Content: View>: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(title)
-                .font(.title2.bold())
+        VStack(alignment: .leading, spacing: SettingsLayout.pageSpacing) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(title)
+                    .font(.title2.bold())
 
-            if let subtitle {
-                Text(subtitle)
-                    .foregroundStyle(.secondary)
+                if let subtitle {
+                    Text(subtitle)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             content
-            Spacer()
+            Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding()
+        .padding(SettingsLayout.pagePadding)
     }
 }
 
@@ -122,10 +132,27 @@ private struct SettingsSectionTitle: View {
     }
 }
 
+private struct SettingsSection<Content: View>: View {
+    let title: String
+    @ViewBuilder let content: Content
+
+    init(title: String, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: SettingsLayout.sectionSpacing) {
+            SettingsSectionTitle(text: title)
+            content
+                .padding(.leading, SettingsLayout.subordinateIndent)
+        }
+    }
+}
+
 struct UpdateSettingsView: View {
     @State private var automaticallyChecks: Bool
     private let updater: SPUUpdater
-    private let subordinateIndent: CGFloat = 14
 
     init(updater: SPUUpdater) {
         self.updater = updater
@@ -134,13 +161,12 @@ struct UpdateSettingsView: View {
 
     var body: some View {
         SettingsPage(title: "Updates", subtitle: "Control app update behavior.") {
-            SettingsSectionTitle(text: "Preferences")
-
-            Toggle("Automatically check for app updates", isOn: $automaticallyChecks)
-                .onChange(of: automaticallyChecks) { _, newValue in
-                    updater.automaticallyChecksForUpdates = newValue
-                }
-                .padding(.leading, subordinateIndent)
+            SettingsSection(title: "Preferences") {
+                Toggle("Automatically check for app updates", isOn: $automaticallyChecks)
+                    .onChange(of: automaticallyChecks) { _, newValue in
+                        updater.automaticallyChecksForUpdates = newValue
+                    }
+            }
         }
     }
 }
@@ -148,55 +174,51 @@ struct UpdateSettingsView: View {
 struct DownloadsSettingsView: View {
     @ObservedObject var appSettings: AppSettings
     @StateObject private var fileService = FileService()
-    private let subordinateIndent: CGFloat = 14
 
     var body: some View {
         SettingsPage(title: "Downloads", subtitle: "Default behavior for new download batches.") {
-            SettingsSectionTitle(text: "Download Folder")
-
-            Group {
-                FolderSelectionView(fileService: fileService, isDisabled: false) { folder in
-                    if let folder {
-                        appSettings.downloadFolderPath = folder.path
-                    }
-                }
-            }
-            .padding(.leading, subordinateIndent)
-
-            SettingsSectionTitle(text: "Audio Defaults")
-
-            Group {
-                HStack(spacing: 12) {
-                    Text("Quality")
-                        .frame(width: 60, alignment: .leading)
-                    Picker("Quality", selection: $appSettings.quality) {
-                        ForEach(AudioQuality.allCases, id: \.self) { quality in
-                            Text(quality.displayName).tag(quality)
+            VStack(alignment: .leading, spacing: SettingsLayout.pageSpacing) {
+                SettingsSection(title: "Download Folder") {
+                    FolderSelectionView(fileService: fileService, isDisabled: false) { folder in
+                        if let folder {
+                            appSettings.downloadFolderPath = folder.path
                         }
                     }
-                    .labelsHidden()
-                    .pickerStyle(.segmented)
                 }
 
-                Toggle("Embed metadata", isOn: $appSettings.embedMetadata)
+                SettingsSection(title: "Audio Defaults") {
+                    VStack(alignment: .leading, spacing: SettingsLayout.rowSpacing) {
+                        HStack(spacing: 12) {
+                            Text("Quality")
+                                .frame(width: 60, alignment: .leading)
+                            Picker("Quality", selection: $appSettings.quality) {
+                                ForEach(AudioQuality.allCases, id: \.self) { quality in
+                                    Text(quality.displayName).tag(quality)
+                                }
+                            }
+                            .labelsHidden()
+                            .pickerStyle(.segmented)
+                        }
 
-                if appSettings.format.supportsThumbnailEmbed {
-                    Toggle("Embed thumbnail", isOn: $appSettings.embedThumbnail)
-                } else {
-                    Text("Thumbnail embed is unavailable for the selected format.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        Toggle("Embed metadata", isOn: $appSettings.embedMetadata)
+
+                        if appSettings.format.supportsThumbnailEmbed {
+                            Toggle("Embed thumbnail", isOn: $appSettings.embedThumbnail)
+                        } else {
+                            Text("Thumbnail embed is unavailable for the selected format.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+
+                SettingsSection(title: "Batch Behavior") {
+                    VStack(alignment: .leading, spacing: SettingsLayout.rowSpacing) {
+                        Toggle("Fast downloads", isOn: $appSettings.fastDownloads)
+                        Toggle("Open download folder after successful batch", isOn: $appSettings.openFolderOnSuccess)
+                    }
                 }
             }
-            .padding(.leading, subordinateIndent)
-
-            SettingsSectionTitle(text: "Batch Behavior")
-
-            Group {
-                Toggle("Fast downloads", isOn: $appSettings.fastDownloads)
-                Toggle("Open download folder after successful batch", isOn: $appSettings.openFolderOnSuccess)
-            }
-            .padding(.leading, subordinateIndent)
         }
         .onAppear {
             fileService.selectedFolder = appSettings.downloadFolderURL
@@ -205,100 +227,102 @@ struct DownloadsSettingsView: View {
 }
 
 struct AboutSettingsView: View {
-    private let subordinateIndent: CGFloat = 14
-
     var body: some View {
         SettingsPage(title: "About", subtitle: "A focused desktop app for quick audio downloads.") {
-            SettingsSectionTitle(text: "meloDL")
+            VStack(alignment: .leading, spacing: SettingsLayout.pageSpacing) {
+                SettingsSection(title: "meloDL") {
+                    Text("meloDL is a lightweight macOS app for downloading and converting audio with a simple, settings-first workflow.")
+                        .font(.body)
+                }
 
-            Text("meloDL is a lightweight macOS app for downloading and converting audio with a simple, settings-first workflow.")
-                .padding(.leading, subordinateIndent)
+                SettingsSection(title: "Details") {
+                    VStack(alignment: .leading, spacing: SettingsLayout.rowSpacing) {
+                        HStack(spacing: 0) {
+                            Text("Built and maintained by ")
+                                .foregroundStyle(.secondary)
+                            Link("Alexandru Apavaloaiei", destination: URL(string: "https://apvl.dev")!)
+                                .foregroundStyle(.blue)
+                        }
+                        .font(.body)
 
-            SettingsSectionTitle(text: "Details")
-
-            Text("Built and maintained by Alexandru Apavaloaiei. Official website: coming soon.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .padding(.leading, subordinateIndent)
+                        HStack(spacing: 0) {
+                            Text("Official website: ")
+                                .foregroundStyle(.secondary)
+                            Link("apvl.dev/stuff/meloDL", destination: URL(string: "https://apvl.dev/stuff/meloDL")!)
+                                .foregroundStyle(.blue)
+                        }
+                        .font(.body)
+                    }
+                }
+            }
         }
     }
 }
 
 struct CreditsSettingsView: View {
-    private let subordinateIndent: CGFloat = 14
-
     var body: some View {
         SettingsPage(title: "Credits", subtitle: "People and tools that made meloDL possible.") {
-            SettingsSectionTitle(text: "Open Source")
+            VStack(alignment: .leading, spacing: SettingsLayout.pageSpacing) {
+                SettingsSection(title: "Open Source") {
+                    VStack(alignment: .leading, spacing: SettingsLayout.rowSpacing) {
+                        Link("yt-dlp", destination: URL(string: "https://github.com/yt-dlp/yt-dlp")!)
+                        Link("ffmpeg", destination: URL(string: "https://github.com/FFmpeg/FFmpeg")!)
+                    }
+                    .font(.body)
+                }
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text("yt-dlp")
-                    .font(.headline)
-                Link("github.com/yt-dlp/yt-dlp", destination: URL(string: "https://github.com/yt-dlp/yt-dlp")!)
+                SettingsSection(title: "License") {
+                    Text("meloDL is released under the MIT License.")
+                        .font(.body)
+                        .foregroundStyle(.secondary)
+                }
             }
-                .padding(.leading, subordinateIndent)
-
-            SettingsSectionTitle(text: "Acknowledgements")
-
-            Text("Created and maintained by Alexandru Apavaloaiei.")
-                .padding(.leading, subordinateIndent)
-
-            SettingsSectionTitle(text: "License")
-
-            Text("meloDL is released under the MIT License.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .padding(.leading, subordinateIndent)
         }
     }
 }
 
 struct SupportSettingsView: View {
-    private let subordinateIndent: CGFloat = 14
-
     var body: some View {
         SettingsPage(title: "Support", subtitle: "Get help, report issues, and contact the team.") {
-            SettingsSectionTitle(text: "Need Help?")
+            SettingsSection(title: "Contact") {
+                VStack(alignment: .leading, spacing: SettingsLayout.rowSpacing) {
+                    HStack(spacing: 6) {
+                        Text("Email:")
+                            .font(.body)
+                            .foregroundStyle(.secondary)
 
-            Text("Need help or want to report an issue?")
-                .padding(.leading, subordinateIndent)
-
-            SettingsSectionTitle(text: "Contact")
-
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 6) {
-                    Text("Email:")
-                        .font(.body)
-                        .foregroundStyle(.secondary)
-
-                    Button {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString("alex@apvl.dev", forType: .string)
-                    } label: {
-                        HStack(spacing: 4) {
-                            Text(verbatim: "alex@apvl.dev")
-                            Image(systemName: "doc.on.doc")
+                        Button {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString("alex@apvl.dev", forType: .string)
+                        } label: {
+                            HStack(spacing: 4) {
+                                Text(verbatim: "alex@apvl.dev")
+                                Image(systemName: "doc.on.doc")
+                            }
+                            .font(.body)
+                            .foregroundStyle(.secondary)
                         }
-                        .font(.body)
-                        .foregroundStyle(.secondary)
+                        .buttonStyle(.plain)
+                        .contentShape(.rect)
+                        .help("Copy email address")
+                        .onHover { isHovering in
+                            if isHovering {
+                                NSCursor.pointingHand.push()
+                            } else {
+                                NSCursor.pop()
+                            }
+                        }
                     }
-                    .buttonStyle(.plain)
-                    .contentShape(.rect)
-                    .help("Copy email address")
-                    .onHover { isHovering in
-                        if isHovering {
-                            NSCursor.pointingHand.push()
-                        } else {
-                            NSCursor.pop()
-                        }
+
+                    HStack(spacing: 6) {
+                        Text("GitHub Issues:")
+                            .font(.body)
+                            .foregroundStyle(.secondary)
+                        Link("github.com/alexapvl/meloDL/issues", destination: URL(string: "https://github.com/alexapvl/meloDL/issues")!)
+                            .font(.body)
                     }
                 }
-
-                Text("GitHub Issues: coming soon (repository not public yet).")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
-                .padding(.leading, subordinateIndent)
         }
     }
 }
