@@ -3,10 +3,16 @@ import SwiftUI
 import Sparkle
 import UserNotifications
 
+private enum LaunchArguments {
+    static let menubarOnly = "--menubar-only"
+    static let windowMode = "--window-mode"
+}
+
 @main
 struct meloDLApp: App {
     @StateObject private var appSettings = AppSettings()
     private let notificationDelegate = DownloadNotificationCenterDelegate()
+    private let launchMenubarOnlyMode: Bool
     private let updaterController = SPUStandardUpdaterController(
         startingUpdater: true,
         updaterDelegate: nil,
@@ -14,16 +20,47 @@ struct meloDLApp: App {
     )
 
     init() {
+        let defaults = UserDefaults.standard
+        if CommandLine.arguments.contains(LaunchArguments.menubarOnly) {
+            defaults.set(true, forKey: "settings.menubarOnlyMode")
+        } else if CommandLine.arguments.contains(LaunchArguments.windowMode) {
+            defaults.set(false, forKey: "settings.menubarOnlyMode")
+        }
+
+        let isMenubarOnly = defaults.bool(forKey: "settings.menubarOnlyMode")
+        self.launchMenubarOnlyMode = isMenubarOnly
         UNUserNotificationCenter.current().delegate = notificationDelegate
         DownloadNotificationService.shared.configureNotificationCategories()
+        AppModeController.applyMenubarOnlyMode(isMenubarOnly)
     }
 
     var body: some Scene {
+        mainWindowScene
+        menuBarScene
+        settingsScene
+    }
+
+    private var mainWindowScene: some Scene {
         WindowGroup {
-            ContentView(
-                appSettings: appSettings,
-                onCheckAppUpdates: checkForAppUpdates
-            )
+            if launchMenubarOnlyMode {
+                Color.clear
+                    .frame(width: 0, height: 0)
+                    .onAppear {
+                        DispatchQueue.main.async {
+                            for window in NSApplication.shared.windows where window.level == .normal {
+                                window.close()
+                            }
+                        }
+                    }
+            } else {
+                ContentView(
+                    appSettings: appSettings,
+                    onCheckAppUpdates: checkForAppUpdates
+                )
+                .onAppear {
+                    focusMainWindowIfNeeded()
+                }
+            }
         }
         .commands {
             CommandGroup(replacing: .newItem) {
@@ -34,7 +71,24 @@ struct meloDLApp: App {
                 Button("Check for Updates...", action: checkForAllUpdates)
             }
         }
+    }
 
+    private var menuBarScene: some Scene {
+        MenuBarExtra(
+            "meloDL",
+            systemImage: "arrow.down.circle",
+            isInserted: .constant(launchMenubarOnlyMode)
+        ) {
+            MenuBarContentView(
+                appSettings: appSettings,
+                onCheckAppUpdates: checkForAppUpdates,
+                onQuit: quitApp
+            )
+        }
+        .menuBarExtraStyle(.window)
+    }
+
+    private var settingsScene: some Scene {
         Settings {
             SettingsView(
                 updater: updaterController.updater,
@@ -54,6 +108,21 @@ struct meloDLApp: App {
             await GitHubUpdateService.shared.checkForUpdates()
         }
     }
+
+    private func focusMainWindowIfNeeded() {
+        guard !launchMenubarOnlyMode else { return }
+
+        // Window creation races app activation during relaunch from accessory mode.
+        // Focus once immediately and once shortly after to catch late window creation.
+        DispatchQueue.main.async {
+            NSApplication.shared.activate(ignoringOtherApps: true)
+            NSApplication.shared.windows.first(where: { $0.level == .normal })?.makeKeyAndOrderFront(nil)
+        }
+    }
+
+    private func quitApp() {
+        NSApp.terminate(nil)
+    }
 }
 
 private final class DownloadNotificationCenterDelegate: NSObject, UNUserNotificationCenterDelegate {
@@ -70,6 +139,34 @@ private final class DownloadNotificationCenterDelegate: NSObject, UNUserNotifica
                                 willPresent notification: UNNotification,
                                 withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
         completionHandler([.banner, .sound])
+    }
+}
+
+private enum AppModeController {
+    static func applyMenubarOnlyMode(_ enabled: Bool) {
+        if !enabled {
+            // LSUIElement = YES starts the app as .accessory (no Dock icon).
+            // For window mode, upgrade to .regular so Dock icon and app menu appear.
+            NSApplication.shared.setActivationPolicy(.regular)
+            NSApplication.shared.activate(ignoringOtherApps: true)
+        }
+    }
+}
+
+private enum AppRelauncher {
+    static func relaunch(menubarOnly: Bool) {
+        let appPath = Bundle.main.bundlePath
+        guard !appPath.isEmpty else {
+            NSApplication.shared.terminate(nil)
+            return
+        }
+
+        let modeArgument = menubarOnly ? LaunchArguments.menubarOnly : LaunchArguments.windowMode
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        process.arguments = ["-n", appPath, "--args", modeArgument]
+        try? process.run()
+        NSApplication.shared.terminate(nil)
     }
 }
 
@@ -198,6 +295,7 @@ struct UpdateSettingsView: View {
 struct DownloadsSettingsView: View {
     @ObservedObject var appSettings: AppSettings
     @StateObject private var fileService = FileService()
+    @State private var showRestartPrompt = false
 
     var body: some View {
         SettingsPage(title: "Downloads", subtitle: "Default behavior for new download batches.") {
@@ -241,12 +339,28 @@ struct DownloadsSettingsView: View {
                         Toggle("Fast downloads", isOn: $appSettings.fastDownloads)
                         Toggle("Open download folder after successful batch", isOn: $appSettings.openFolderOnSuccess)
                         Toggle("Show notification when download finishes", isOn: $appSettings.notifyOnDownloadCompletion)
+                        Toggle("Use menubar-only mode", isOn: $appSettings.menubarOnlyMode)
+                            .onChange(of: appSettings.menubarOnlyMode) { _, isEnabled in
+                                _ = isEnabled
+                                showRestartPrompt = true
+                            }
+                        Text("Takes effect after restart. In menubar-only mode, meloDL hides the Dock icon and main window.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                 }
             }
         }
         .onAppear {
             fileService.selectedFolder = appSettings.downloadFolderURL
+        }
+        .alert("Restart Required", isPresented: $showRestartPrompt) {
+            Button("Later", role: .cancel) {}
+            Button("Relaunch Now") {
+                AppRelauncher.relaunch(menubarOnly: appSettings.menubarOnlyMode)
+            }
+        } message: {
+            Text("Please restart meloDL to apply menubar mode changes.")
         }
     }
 }

@@ -23,6 +23,9 @@ final class AppSettings: ObservableObject {
     @Published var notifyOnDownloadCompletion: Bool {
         didSet { defaults.set(notifyOnDownloadCompletion, forKey: Keys.notifyOnDownloadCompletion) }
     }
+    @Published var menubarOnlyMode: Bool {
+        didSet { defaults.set(menubarOnlyMode, forKey: Keys.menubarOnlyMode) }
+    }
     @Published var downloadFolderPath: String {
         didSet { defaults.set(downloadFolderPath, forKey: Keys.downloadFolderPath) }
     }
@@ -74,6 +77,12 @@ final class AppSettings: ObservableObject {
             notifyOnDownloadCompletion = true
         }
 
+        if defaults.object(forKey: Keys.menubarOnlyMode) != nil {
+            menubarOnlyMode = defaults.bool(forKey: Keys.menubarOnlyMode)
+        } else {
+            menubarOnlyMode = false
+        }
+
         let persistedPath = defaults.string(forKey: Keys.downloadFolderPath) ?? ""
         if persistedPath.isEmpty {
             downloadFolderPath = DownloadConfiguration.defaultDownloadFolder.path
@@ -111,5 +120,6 @@ final class AppSettings: ObservableObject {
         static let downloadFolderPath = "settings.downloadFolderPath"
         static let openFolderOnSuccess = "settings.openFolderOnSuccess"
         static let notifyOnDownloadCompletion = "settings.notifyOnDownloadCompletion"
+        static let menubarOnlyMode = "settings.menubarOnlyMode"
     }
 }

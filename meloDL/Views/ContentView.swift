@@ -4,10 +4,14 @@ struct ContentView: View {
     @ObservedObject private var appSettings: AppSettings
     @StateObject private var viewModel: ContentViewModel
     private let onCheckAppUpdates: () -> Void
+    private let onOpenSettings: (() -> Void)?
 
-    init(appSettings: AppSettings, onCheckAppUpdates: @escaping () -> Void) {
+    init(appSettings: AppSettings,
+         onCheckAppUpdates: @escaping () -> Void,
+         onOpenSettings: (() -> Void)? = nil) {
         self.appSettings = appSettings
         self.onCheckAppUpdates = onCheckAppUpdates
+        self.onOpenSettings = onOpenSettings
         _viewModel = StateObject(wrappedValue: ContentViewModel(appSettings: appSettings))
     }
 
@@ -33,11 +37,19 @@ struct ContentView: View {
 
                     Spacer(minLength: 0)
 
-                    SettingsLink {
-                        Label("Advanced Settings", systemImage: "slider.horizontal.3")
+                    if let onOpenSettings {
+                        Button(action: onOpenSettings) {
+                            Label("Advanced Settings", systemImage: "gear")
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(viewModel.isDownloading)
+                    } else {
+                        SettingsLink {
+                            Label("Advanced Settings", systemImage: "gear")
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(viewModel.isDownloading)
                     }
-                    .buttonStyle(.bordered)
-                    .disabled(viewModel.isDownloading)
                 }
 
                 DownloadButtonView(
