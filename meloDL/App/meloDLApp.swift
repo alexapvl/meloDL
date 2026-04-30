@@ -333,7 +333,6 @@ struct DownloadsSettingsView: View {
 
     var body: some View {
         SettingsPage(title: "Downloads", subtitle: "Default behavior for new download batches.") {
-            ScrollView {
                 VStack(alignment: .leading, spacing: SettingsLayout.pageSpacing) {
                     SettingsSection(title: "Download Folder") {
                         FolderSelectionView(fileService: fileService, isDisabled: false) { folder in
@@ -386,7 +385,6 @@ struct DownloadsSettingsView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-        }
         .onAppear {
             fileService.selectedFolder = appSettings.downloadFolderURL
         }
@@ -488,6 +486,7 @@ struct CreditsSettingsView: View {
                     VStack(alignment: .leading, spacing: SettingsLayout.rowSpacing) {
                         Link("yt-dlp", destination: URL(string: "https://github.com/yt-dlp/yt-dlp")!)
                         Link("ffmpeg", destination: URL(string: "https://github.com/FFmpeg/FFmpeg")!)
+                        Link("ffprobe", destination: URL(string: "https://ffmpeg.org/ffprobe.html")!)
                     }
                     .font(.body)
                 }
