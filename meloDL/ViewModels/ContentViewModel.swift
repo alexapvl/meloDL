@@ -226,7 +226,7 @@ class ContentViewModel: ObservableObject {
             downloads[idx].title = title
             downloads[idx].status = .downloading
             if playlistTotalCount <= 1 {
-                statusMessage = "Downloading"
+                statusMessage = "Downloading to \(appSettings.downloadFolderPath)"
             }
 
         case .titleResolved(let sourceURL, let title, _):
