@@ -299,56 +299,59 @@ struct DownloadsSettingsView: View {
 
     var body: some View {
         SettingsPage(title: "Downloads", subtitle: "Default behavior for new download batches.") {
-            VStack(alignment: .leading, spacing: SettingsLayout.pageSpacing) {
-                SettingsSection(title: "Download Folder") {
-                    FolderSelectionView(fileService: fileService, isDisabled: false) { folder in
-                        if let folder {
-                            appSettings.downloadFolderPath = folder.path
+            ScrollView {
+                VStack(alignment: .leading, spacing: SettingsLayout.pageSpacing) {
+                    SettingsSection(title: "Download Folder") {
+                        FolderSelectionView(fileService: fileService, isDisabled: false) { folder in
+                            if let folder {
+                                appSettings.downloadFolderPath = folder.path
+                            }
                         }
                     }
-                }
 
-                SettingsSection(title: "Audio Defaults") {
-                    VStack(alignment: .leading, spacing: SettingsLayout.rowSpacing) {
-                        HStack(spacing: 12) {
-                            Text("Quality")
-                                .frame(width: 60, alignment: .leading)
-                            Picker("Quality", selection: $appSettings.quality) {
-                                ForEach(AudioQuality.allCases, id: \.self) { quality in
-                                    Text(quality.displayName).tag(quality)
+                    SettingsSection(title: "Audio Defaults") {
+                        VStack(alignment: .leading, spacing: SettingsLayout.rowSpacing) {
+                            HStack(spacing: 12) {
+                                Text("Quality")
+                                    .frame(width: 60, alignment: .leading)
+                                Picker("Quality", selection: $appSettings.quality) {
+                                    ForEach(AudioQuality.allCases, id: \.self) { quality in
+                                        Text(quality.displayName).tag(quality)
+                                    }
                                 }
+                                .labelsHidden()
+                                .pickerStyle(.segmented)
                             }
-                            .labelsHidden()
-                            .pickerStyle(.segmented)
+
+                            Toggle("Embed metadata", isOn: $appSettings.embedMetadata)
+
+                            if appSettings.format.supportsThumbnailEmbed {
+                                Toggle("Embed thumbnail", isOn: $appSettings.embedThumbnail)
+                            } else {
+                                Text("Thumbnail embed is unavailable for the selected format.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
+                    }
 
-                        Toggle("Embed metadata", isOn: $appSettings.embedMetadata)
-
-                        if appSettings.format.supportsThumbnailEmbed {
-                            Toggle("Embed thumbnail", isOn: $appSettings.embedThumbnail)
-                        } else {
-                            Text("Thumbnail embed is unavailable for the selected format.")
+                    SettingsSection(title: "Batch Behavior") {
+                        VStack(alignment: .leading, spacing: SettingsLayout.rowSpacing) {
+                            Toggle("Fast downloads", isOn: $appSettings.fastDownloads)
+                            Toggle("Open download folder after successful batch", isOn: $appSettings.openFolderOnSuccess)
+                            Toggle("Show notification when download finishes", isOn: $appSettings.notifyOnDownloadCompletion)
+                            Toggle("Use menubar-only mode", isOn: $appSettings.menubarOnlyMode)
+                                .onChange(of: appSettings.menubarOnlyMode) { _, isEnabled in
+                                    _ = isEnabled
+                                    showRestartPrompt = true
+                                }
+                            Text("Takes effect after restart. In menubar-only mode, meloDL hides the Dock icon and main window.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
                     }
                 }
-
-                SettingsSection(title: "Batch Behavior") {
-                    VStack(alignment: .leading, spacing: SettingsLayout.rowSpacing) {
-                        Toggle("Fast downloads", isOn: $appSettings.fastDownloads)
-                        Toggle("Open download folder after successful batch", isOn: $appSettings.openFolderOnSuccess)
-                        Toggle("Show notification when download finishes", isOn: $appSettings.notifyOnDownloadCompletion)
-                        Toggle("Use menubar-only mode", isOn: $appSettings.menubarOnlyMode)
-                            .onChange(of: appSettings.menubarOnlyMode) { _, isEnabled in
-                                _ = isEnabled
-                                showRestartPrompt = true
-                            }
-                        Text("Takes effect after restart. In menubar-only mode, meloDL hides the Dock icon and main window.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .onAppear {
