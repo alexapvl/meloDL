@@ -74,16 +74,18 @@ struct meloDLApp: App {
     }
 
     private var menuBarScene: some Scene {
-        MenuBarExtra(
-            "meloDL",
-            systemImage: "arrow.down.circle",
-            isInserted: .constant(launchMenubarOnlyMode)
-        ) {
+        MenuBarExtra(isInserted: .constant(launchMenubarOnlyMode)) {
             MenuBarContentView(
                 appSettings: appSettings,
                 onCheckAppUpdates: checkForAppUpdates,
                 onQuit: quitApp
             )
+        } label: {
+            Image("MenuBarLogo")
+                .renderingMode(.template)
+                .resizable()
+                .scaledToFit()
+                .frame(width: 10, height: 10)
         }
         .menuBarExtraStyle(.window)
     }
