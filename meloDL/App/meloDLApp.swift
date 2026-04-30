@@ -181,6 +181,11 @@ struct SettingsView: View {
                     Label("Downloads", systemImage: "arrow.down.circle")
                 }
 
+            BehaviorSettingsView(appSettings: appSettings)
+                .tabItem {
+                    Label("Behavior", systemImage: "switch.2")
+                }
+
             UpdateSettingsView(updater: updater)
                 .tabItem {
                     Label("Updates", systemImage: "arrow.triangle.2.circlepath")
@@ -271,6 +276,25 @@ private struct SettingsSection<Content: View>: View {
     }
 }
 
+private struct SettingsToggleRow: View {
+    let title: String
+    @Binding var isOn: Bool
+    var onChange: ((Bool, Bool) -> Void)? = nil
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text(title)
+            Spacer(minLength: 0)
+            Toggle("", isOn: $isOn)
+                .labelsHidden()
+        }
+        .toggleStyle(.switch)
+        .onChange(of: isOn) { oldValue, newValue in
+            onChange?(oldValue, newValue)
+        }
+    }
+}
+
 struct UpdateSettingsView: View {
     @State private var automaticallyChecks: Bool
     private let updater: SPUUpdater
@@ -282,11 +306,22 @@ struct UpdateSettingsView: View {
 
     var body: some View {
         SettingsPage(title: "Updates", subtitle: "Control app update behavior.") {
-            SettingsSection(title: "Preferences") {
-                Toggle("Automatically check for app updates", isOn: $automaticallyChecks)
-                    .onChange(of: automaticallyChecks) { _, newValue in
+            VStack(alignment: .leading, spacing: SettingsLayout.pageSpacing) {
+                SettingsSection(title: "Preferences") {
+                    SettingsToggleRow(
+                        title: "Automatically check for app updates",
+                        isOn: $automaticallyChecks
+                    ) { _, newValue in
                         updater.automaticallyChecksForUpdates = newValue
                     }
+                }
+
+                SettingsSection(title: "Manual Check") {
+                    Button("Check for Updates...") {
+                        updater.checkForUpdates()
+                    }
+                    .disabled(!updater.canCheckForUpdates)
+                }
             }
         }
     }
@@ -295,7 +330,6 @@ struct UpdateSettingsView: View {
 struct DownloadsSettingsView: View {
     @ObservedObject var appSettings: AppSettings
     @StateObject private var fileService = FileService()
-    @State private var showRestartPrompt = false
 
     var body: some View {
         SettingsPage(title: "Downloads", subtitle: "Default behavior for new download batches.") {
@@ -323,10 +357,16 @@ struct DownloadsSettingsView: View {
                                 .pickerStyle(.segmented)
                             }
 
-                            Toggle("Embed metadata", isOn: $appSettings.embedMetadata)
+                            SettingsToggleRow(
+                                title: "Embed metadata",
+                                isOn: $appSettings.embedMetadata
+                            )
 
                             if appSettings.format.supportsThumbnailEmbed {
-                                Toggle("Embed thumbnail", isOn: $appSettings.embedThumbnail)
+                                SettingsToggleRow(
+                                    title: "Embed thumbnail",
+                                    isOn: $appSettings.embedThumbnail
+                                )
                             } else {
                                 Text("Thumbnail embed is unavailable for the selected format.")
                                     .font(.caption)
@@ -337,17 +377,10 @@ struct DownloadsSettingsView: View {
 
                     SettingsSection(title: "Batch Behavior") {
                         VStack(alignment: .leading, spacing: SettingsLayout.rowSpacing) {
-                            Toggle("Fast downloads", isOn: $appSettings.fastDownloads)
-                            Toggle("Open download folder after successful batch", isOn: $appSettings.openFolderOnSuccess)
-                            Toggle("Show notification when download finishes", isOn: $appSettings.notifyOnDownloadCompletion)
-                            Toggle("Use menubar-only mode", isOn: $appSettings.menubarOnlyMode)
-                                .onChange(of: appSettings.menubarOnlyMode) { _, isEnabled in
-                                    _ = isEnabled
-                                    showRestartPrompt = true
-                                }
-                            Text("Takes effect after restart. In menubar-only mode, meloDL hides the Dock icon and main window.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                            SettingsToggleRow(
+                                title: "Fast downloads",
+                                isOn: $appSettings.fastDownloads
+                            )
                         }
                     }
                 }
@@ -356,6 +389,44 @@ struct DownloadsSettingsView: View {
         }
         .onAppear {
             fileService.selectedFolder = appSettings.downloadFolderURL
+        }
+    }
+}
+
+struct BehaviorSettingsView: View {
+    @ObservedObject var appSettings: AppSettings
+    @State private var showRestartPrompt = false
+
+    var body: some View {
+        SettingsPage(title: "Behavior", subtitle: "App and post-download actions.") {
+            ScrollView {
+                VStack(alignment: .leading, spacing: SettingsLayout.pageSpacing) {
+                    SettingsSection(title: "After Download") {
+                        VStack(alignment: .leading, spacing: SettingsLayout.rowSpacing) {
+                            SettingsToggleRow(
+                                title: "Open download folder after successful batch",
+                                isOn: $appSettings.openFolderOnSuccess
+                            )
+                            SettingsToggleRow(
+                                title: "Show notification when download finishes",
+                                isOn: $appSettings.notifyOnDownloadCompletion
+                            )
+                        }
+                    }
+
+                    SettingsSection(title: "App Mode") {
+                        VStack(alignment: .leading, spacing: SettingsLayout.rowSpacing) {
+                            SettingsToggleRow(
+                                title: "Use menubar-only mode",
+                                isOn: $appSettings.menubarOnlyMode
+                            ) { _, _ in
+                                showRestartPrompt = true
+                            }
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
         .alert("Restart Required", isPresented: $showRestartPrompt) {
             Button("Later", role: .cancel) {}
