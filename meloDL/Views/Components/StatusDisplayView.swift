@@ -74,6 +74,10 @@ struct DownloadItemRow: View {
         case .downloading:
             ProgressView()
                 .controlSize(.small)
+        case .skipped:
+            Image(systemName: "forward.fill")
+                .foregroundStyle(.secondary)
+                .font(.caption)
         case .completed:
             Image(systemName: "checkmark.circle.fill")
                 .foregroundStyle(.green)

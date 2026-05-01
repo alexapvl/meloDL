@@ -1,6 +1,7 @@
 import AppKit
 import Sparkle
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct SettingsView: View {
     let updater: SPUUpdater
@@ -16,6 +17,11 @@ struct SettingsView: View {
             BehaviorSettingsView(appSettings: appSettings)
                 .tabItem {
                     Label("Behavior", systemImage: "switch.2")
+                }
+
+            IndexingSettingsView(appSettings: appSettings)
+                .tabItem {
+                    Label("Indexing", systemImage: "magnifyingglass")
                 }
 
             UpdateSettingsView(updater: updater)
@@ -199,7 +205,7 @@ struct DownloadsSettingsView: View {
                                 isOn: $appSettings.embedThumbnail
                             )
                         } else {
-                            Text("Thumbnail embed is unavailable for the selected format.")
+                            Text("Thumbnail embed is only available for MP3, M4A, and FLAC formats.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -266,6 +272,255 @@ struct BehaviorSettingsView: View {
         } message: {
             Text("Please restart meloDL to apply menubar mode changes.")
         }
+    }
+}
+
+struct IndexingSettingsView: View {
+    @ObservedObject var appSettings: AppSettings
+    @StateObject private var viewModel: IndexingSettingsViewModel
+    @State private var dropTargeted = false
+
+    init(appSettings: AppSettings) {
+        self.appSettings = appSettings
+        _viewModel = StateObject(wrappedValue: IndexingSettingsViewModel(appSettings: appSettings))
+    }
+
+    var body: some View {
+        SettingsPage(title: "Indexing", subtitle: "Configure duplicate detection indexing roots and maintenance.") {
+            ScrollView {
+                VStack(alignment: .leading, spacing: SettingsLayout.pageSpacing) {
+                    SettingsSection(title: "Duplicate Detection") {
+                        SettingsToggleRow(
+                            title: "Enable duplicate detection before download",
+                            isOn: $appSettings.duplicateDetectionEnabled
+                        )
+                    }
+
+                    SettingsSection(title: "Index Status") {
+                        VStack(alignment: .leading, spacing: SettingsLayout.rowSpacing) {
+                            HStack(spacing: 8) {
+                                if viewModel.isIndexing {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                    Text("Indexing...")
+                                } else {
+                                    Image(systemName: "checkmark.circle")
+                                        .foregroundStyle(.secondary)
+                                    Text("Idle")
+                                }
+                            }
+
+                            Text(lastIndexedText)
+                                .foregroundStyle(.secondary)
+                            Text("Indexed tracks: \(viewModel.indexedTrackCount)")
+                                .foregroundStyle(.secondary)
+                            Text("DB (data): \(formatBytes(viewModel.databaseSizeMainBytes))")
+                                .foregroundStyle(.secondary)
+                            Text("DB (WAL buffer): \(formatBytes(viewModel.databaseSizeWalBytes))")
+                                .foregroundStyle(.secondary)
+                            Text("DB (shared memory): \(formatBytes(viewModel.databaseSizeShmBytes))")
+                                .foregroundStyle(.secondary)
+                            Text("DB (total): \(formatBytes(viewModel.databaseSizeTotalBytes))")
+                                .foregroundStyle(.secondary)
+
+                            if !viewModel.inaccessibleRoots.isEmpty {
+                                Text("Some indexed folders are currently inaccessible.")
+                                    .foregroundStyle(.orange)
+                            }
+
+                            HStack(spacing: 10) {
+                                Button("Update index now") {
+                                    viewModel.updateIndexNow()
+                                }
+                                .disabled(!viewModel.canUpdateIndexNow)
+
+                                Button("Clear indexing data...") {
+                                    viewModel.showClearDataConfirmation = true
+                                }
+                                .disabled(viewModel.isIndexing)
+                            }
+                        }
+                        .font(.caption)
+                    }
+
+                    SettingsSection(title: "Indexed Folders") {
+                        VStack(alignment: .leading, spacing: SettingsLayout.rowSpacing) {
+                            List(selection: $viewModel.selectedRoot) {
+                                if viewModel.roots.isEmpty {
+                                    Text("No indexed folders yet")
+                                        .foregroundStyle(.secondary)
+                                        .listRowBackground(Color(.controlBackgroundColor).opacity(0.45))
+                                } else {
+                                    ForEach(Array(viewModel.roots.enumerated()), id: \.element) { index, root in
+                                        Text(root)
+                                            .tag(root)
+                                            .listRowBackground(
+                                                (index % 2 == 0
+                                                    ? Color(.controlBackgroundColor).opacity(0.55)
+                                                    : Color(.controlBackgroundColor).opacity(0.35))
+                                            )
+                                    }
+                                }
+                            }
+                            .frame(minHeight: 130, maxHeight: 170)
+                            .scrollContentBackground(.hidden)
+                            .listStyle(.plain)
+                            .background(
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .fill(Color(.windowBackgroundColor).opacity(0.28))
+                            )
+                            .onDrop(
+                                of: [UTType.fileURL.identifier],
+                                isTargeted: $dropTargeted,
+                                perform: handleDrop(providers:)
+                            )
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 8)
+                                    .stroke(
+                                        dropTargeted ? Color.accentColor : Color.secondary.opacity(0.2),
+                                        lineWidth: 1
+                                    )
+                            }
+
+                            HStack(alignment: .center) {
+                                HStack(spacing: 0) {
+                                    Button {
+                                        viewModel.removeSelectedRoot()
+                                    } label: {
+                                        Image(systemName: "minus")
+                                            .frame(width: 18, height: 18)
+                                    }
+                                    .disabled(viewModel.selectedRoot == nil || viewModel.isIndexing)
+                                    .buttonStyle(.plain)
+                                    .frame(width: 28, height: 24)
+
+                                    Divider()
+                                        .frame(height: 16)
+
+                                    Button {
+                                        viewModel.addRootUsingPanel()
+                                    } label: {
+                                        Image(systemName: "plus")
+                                            .frame(width: 18, height: 18)
+                                    }
+                                    .disabled(viewModel.isIndexing)
+                                    .buttonStyle(.plain)
+                                    .frame(width: 28, height: 24)
+                                }
+                                .background(
+                                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                        .fill(Color(.controlBackgroundColor))
+                                )
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                        .stroke(Color.secondary.opacity(0.25), lineWidth: 1)
+                                )
+
+                                Spacer(minLength: 0)
+
+                                Text("Tip: You can drag and drop folders into this list to add them.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+
+                    if let feedbackMessage = viewModel.feedbackMessage {
+                        Text(feedbackMessage)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .onAppear { viewModel.onAppear() }
+        .onDisappear { viewModel.onDisappear() }
+        .alert("Clear indexing data?", isPresented: $viewModel.showClearDataConfirmation) {
+            Button("Cancel", role: .cancel) {}
+            Button("Clear Data", role: .destructive) {
+                viewModel.clearIndexData()
+            }
+        } message: {
+            Text("This removes all indexed tracks but keeps your folder list.")
+        }
+        .confirmationDialog(
+            "Folder overlap detected",
+            isPresented: Binding(
+                get: { viewModel.pendingConflict != nil },
+                set: { isPresented in
+                    if !isPresented {
+                        viewModel.pendingConflict = nil
+                    }
+                }
+            ),
+            titleVisibility: .visible
+        ) {
+            switch viewModel.pendingConflict {
+            case .childInsideParent:
+                Button("Keep existing parent only") {
+                    viewModel.chooseKeepParentForChildConflict()
+                }
+                Button("Keep both folders") {
+                    viewModel.chooseKeepBothForChildConflict()
+                }
+            case .parentWithChildren:
+                Button("Keep existing child folders only") {
+                    viewModel.chooseKeepChildrenForParentConflict()
+                }
+                Button("Replace child folders with parent") {
+                    viewModel.chooseReplaceChildrenWithParent()
+                }
+            case .none:
+                EmptyView()
+            }
+            Button("Cancel", role: .cancel) {
+                viewModel.pendingConflict = nil
+            }
+        } message: {
+            switch viewModel.pendingConflict {
+            case .childInsideParent(let proposedRoot, let parentRoot):
+                Text("\"\(proposedRoot)\" is inside already indexed parent \"\(parentRoot)\".")
+            case .parentWithChildren(let proposedRoot, let childRoots):
+                Text("\"\(proposedRoot)\" contains currently indexed child folders: \(childRoots.joined(separator: ", ")).")
+            case .none:
+                Text("")
+            }
+        }
+    }
+
+    private var lastIndexedText: String {
+        if let lastIndexedAt = viewModel.lastIndexedAt {
+            return "Last indexed: \(lastIndexedAt.formatted(date: .abbreviated, time: .shortened))"
+        }
+        return "Last indexed: never"
+    }
+
+    private func formatBytes(_ bytes: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+    }
+
+    private func handleDrop(providers: [NSItemProvider]) -> Bool {
+        for provider in providers where provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
+                guard let item else { return }
+                var url: URL?
+                if let data = item as? Data {
+                    url = URL(dataRepresentation: data, relativeTo: nil)
+                } else if let nsData = item as? NSData {
+                    url = URL(dataRepresentation: nsData as Data, relativeTo: nil)
+                } else if let string = item as? String {
+                    url = URL(string: string)
+                } else if let nsURL = item as? NSURL {
+                    url = nsURL as URL
+                }
+                guard let folderURL = url else { return }
+                Task { @MainActor in
+                    viewModel.handleDroppedFolderURLs([folderURL])
+                }
+            }
+        }
+        return true
     }
 }
 

@@ -16,70 +16,90 @@ struct ContentView: View {
     }
 
     var body: some View {
-        VStack(spacing: 20) {
-            Text("meloDL")
-                .font(.largeTitle)
-                .fontWeight(.bold)
-                .padding(.top)
+        ZStack {
+            VStack(spacing: 20) {
+                Text("meloDL")
+                    .font(.largeTitle)
+                    .fontWeight(.bold)
+                    .padding(.top)
 
-            VStack(alignment: .leading, spacing: 15) {
-                URLInputView(
-                    url: $viewModel.url,
-                    isDisabled: viewModel.isDownloading,
-                    onSubmitDownload: viewModel.downloadVideo
-                )
-
-                HStack(alignment: .bottom, spacing: 10) {
-                    FormatPickerView(
-                        format: $appSettings.format,
-                        isDisabled: viewModel.isDownloading
+                VStack(alignment: .leading, spacing: 15) {
+                    URLInputView(
+                        url: $viewModel.url,
+                        isDisabled: viewModel.isDownloading,
+                        onSubmitDownload: viewModel.downloadVideo
                     )
 
-                    Spacer(minLength: 0)
+                    HStack(alignment: .bottom, spacing: 10) {
+                        FormatPickerView(
+                            format: $appSettings.format,
+                            isDisabled: viewModel.isDownloading
+                        )
 
-                    if let onOpenSettings {
-                        Button(action: onOpenSettings) {
-                            Label("Advanced Settings", systemImage: "gear")
+                        Spacer(minLength: 0)
+
+                        if let onOpenSettings {
+                            Button(action: onOpenSettings) {
+                                Label("Advanced Settings", systemImage: "gear")
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(viewModel.isDownloading)
+                        } else {
+                            SettingsLink {
+                                Label("Advanced Settings", systemImage: "gear")
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(viewModel.isDownloading)
                         }
-                        .buttonStyle(.bordered)
-                        .disabled(viewModel.isDownloading)
-                    } else {
-                        SettingsLink {
-                            Label("Advanced Settings", systemImage: "gear")
-                        }
-                        .buttonStyle(.bordered)
-                        .disabled(viewModel.isDownloading)
                     }
-                }
 
-                DownloadButtonView(
-                    isDownloading: viewModel.isDownloading,
-                    canDownload: viewModel.canDownload,
-                    downloadAction: viewModel.downloadVideo,
-                    cancelAction: viewModel.cancelDownloads
+                    DownloadButtonView(
+                        isDownloading: viewModel.isDownloading,
+                        isCheckingDuplicates: viewModel.isCheckingDuplicates,
+                    isAnalyzingPlaylist: viewModel.isAnalyzingPlaylist,
+                        canDownload: viewModel.canDownload,
+                        downloadAction: viewModel.downloadVideo,
+                        cancelAction: viewModel.cancelDownloads
+                    )
+                }
+                .padding(.horizontal)
+
+                StatusDisplayView(
+                    status: viewModel.statusMessage,
+                    statusColor: viewModel.statusColor,
+                    downloads: viewModel.downloads
+                )
+                .padding(.horizontal)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                BinaryVersionBar(
+                    ytdlpVersion: viewModel.ytdlpVersion,
+                    ffmpegVersion: viewModel.ffmpegVersion,
+                    updateStatus: viewModel.binaryUpdateStatus,
+                    onCheckUpdates: {
+                        viewModel.checkForAllUpdates(checkForAppUpdates: onCheckAppUpdates)
+                    }
                 )
             }
-            .padding(.horizontal)
+            .frame(minWidth: 580, minHeight: 600)
+            .onAppear { viewModel.onAppear() }
+            .disabled(viewModel.isShowingDuplicateReview)
+            .blur(radius: viewModel.isShowingDuplicateReview ? 9 : 0)
+            .animation(.easeInOut(duration: 0.2), value: viewModel.isShowingDuplicateReview)
 
-            StatusDisplayView(
-                status: viewModel.statusMessage,
-                statusColor: viewModel.statusColor,
-                downloads: viewModel.downloads
-            )
-            .padding(.horizontal)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-            BinaryVersionBar(
-                ytdlpVersion: viewModel.ytdlpVersion,
-                ffmpegVersion: viewModel.ffmpegVersion,
-                updateStatus: viewModel.binaryUpdateStatus,
-                onCheckUpdates: {
-                    viewModel.checkForAllUpdates(checkForAppUpdates: onCheckAppUpdates)
-                }
-            )
+            if viewModel.isShowingDuplicateReview {
+                DuplicateReviewModal(
+                    items: viewModel.duplicateReviewItems,
+                    currentIndex: viewModel.duplicateReviewIndex,
+                    onSkipCurrent: viewModel.duplicateReviewSkipCurrent,
+                    onDownloadCurrent: viewModel.duplicateReviewDownloadCurrent,
+                    onPreviewCurrent: viewModel.previewCurrentDuplicateMatch,
+                    onCancel: viewModel.cancelDuplicateReview
+                )
+                .ignoresSafeArea()
+                .transition(.opacity)
+            }
         }
-        .frame(minWidth: 580, minHeight: 600)
-        .onAppear { viewModel.onAppear() }
     }
 }
 

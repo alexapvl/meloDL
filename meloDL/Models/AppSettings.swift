@@ -26,6 +26,12 @@ final class AppSettings: ObservableObject {
     @Published var menubarOnlyMode: Bool {
         didSet { defaults.set(menubarOnlyMode, forKey: Keys.menubarOnlyMode) }
     }
+    @Published var duplicateDetectionEnabled: Bool {
+        didSet { defaults.set(duplicateDetectionEnabled, forKey: Keys.duplicateDetectionEnabled) }
+    }
+    @Published var duplicateIndexRoots: [String] {
+        didSet { defaults.set(duplicateIndexRoots, forKey: Keys.duplicateIndexRoots) }
+    }
     @Published var downloadFolderPath: String {
         didSet { defaults.set(downloadFolderPath, forKey: Keys.downloadFolderPath) }
     }
@@ -83,11 +89,26 @@ final class AppSettings: ObservableObject {
             menubarOnlyMode = false
         }
 
+        if defaults.object(forKey: Keys.duplicateDetectionEnabled) != nil {
+            duplicateDetectionEnabled = defaults.bool(forKey: Keys.duplicateDetectionEnabled)
+        } else {
+            duplicateDetectionEnabled = true
+        }
+
+        let resolvedDownloadFolderPath: String
         let persistedPath = defaults.string(forKey: Keys.downloadFolderPath) ?? ""
         if persistedPath.isEmpty {
-            downloadFolderPath = DownloadConfiguration.defaultDownloadFolder.path
+            resolvedDownloadFolderPath = DownloadConfiguration.defaultDownloadFolder.path
         } else {
-            downloadFolderPath = persistedPath
+            resolvedDownloadFolderPath = persistedPath
+        }
+        downloadFolderPath = resolvedDownloadFolderPath
+
+        let storedRoots = defaults.stringArray(forKey: Keys.duplicateIndexRoots) ?? []
+        if storedRoots.isEmpty {
+            duplicateIndexRoots = [resolvedDownloadFolderPath]
+        } else {
+            duplicateIndexRoots = storedRoots
         }
     }
 
@@ -121,5 +142,7 @@ final class AppSettings: ObservableObject {
         static let openFolderOnSuccess = "settings.openFolderOnSuccess"
         static let notifyOnDownloadCompletion = "settings.notifyOnDownloadCompletion"
         static let menubarOnlyMode = "settings.menubarOnlyMode"
+        static let duplicateDetectionEnabled = "settings.duplicateDetectionEnabled"
+        static let duplicateIndexRoots = "settings.duplicateIndexRoots"
     }
 }

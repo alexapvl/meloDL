@@ -16,13 +16,14 @@ struct DownloadItem: Identifiable {
     enum Status {
         case queued
         case downloading
+        case skipped(reason: String)
         case completed(filepath: String)
         case failed(message: String)
 
         var isActive: Bool {
             switch self {
             case .queued, .downloading: return true
-            case .completed, .failed: return false
+            case .skipped, .completed, .failed: return false
             }
         }
 
@@ -30,6 +31,7 @@ struct DownloadItem: Identifiable {
             switch self {
             case .queued: return "Queued"
             case .downloading: return "Downloading"
+            case .skipped(let reason): return reason
             case .completed: return "Completed"
             case .failed(let msg): return "Error: \(msg)"
             }

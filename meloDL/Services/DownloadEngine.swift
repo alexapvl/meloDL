@@ -45,7 +45,7 @@ final class DownloadEngine {
     ) -> AsyncThrowingStream<DownloadEvent, Error> {
         AsyncThrowingStream { continuation in
             let streamGuard = StreamEmissionGuard()
-            Task {
+            let producerTask = Task {
                 var titleTask: Task<Void, Never>?
                 do {
                     let title: String
@@ -76,11 +76,20 @@ final class DownloadEngine {
                     titleTask?.cancel()
                     continuation.finish()
                 } catch {
-                    continuation.yield(.error(url: url, message: error.localizedDescription, worker: nil))
+                    if !(error is CancellationError) && !Task.isCancelled {
+                        continuation.yield(.error(url: url, message: error.localizedDescription, worker: nil))
+                    }
                     await streamGuard.close()
                     titleTask?.cancel()
-                    continuation.finish(throwing: error)
+                    if error is CancellationError || Task.isCancelled {
+                        continuation.finish()
+                    } else {
+                        continuation.finish(throwing: error)
+                    }
                 }
+            }
+            continuation.onTermination = { @Sendable _ in
+                producerTask.cancel()
             }
         }
     }
@@ -107,6 +116,10 @@ final class DownloadEngine {
         }
     }
 
+    func resolveTitleForPreflight(for url: String) async -> String {
+        await resolveSingleTitle(for: url)
+    }
+
     // MARK: - Playlist Download
 
     func downloadPlaylist(
@@ -116,7 +129,7 @@ final class DownloadEngine {
         prefetchedEntries: [PlaylistEntry]? = nil
     ) -> AsyncThrowingStream<DownloadEvent, Error> {
         AsyncThrowingStream { continuation in
-            Task {
+            let producerTask = Task {
                 do {
                     let entries: [PlaylistEntry]
                     if let prefetchedEntries {
@@ -126,6 +139,10 @@ final class DownloadEngine {
                     }
                     guard !entries.isEmpty else {
                         continuation.yield(.error(url: url, message: "No items found in playlist", worker: nil))
+                        continuation.finish()
+                        return
+                    }
+                    guard !Task.isCancelled else {
                         continuation.finish()
                         return
                     }
@@ -144,7 +161,7 @@ final class DownloadEngine {
                     try await withThrowingTaskGroup(of: Void.self) { group in
                         for workerID in 1 ... workerCount {
                             group.addTask {
-                                while let entry = await queue.next() {
+                                while !Task.isCancelled, let entry = await queue.next() {
                                     do {
                                         let event = try await self.runSingleDownload(
                                             entry: entry,
@@ -153,12 +170,15 @@ final class DownloadEngine {
                                             workerID: workerID,
                                             continuation: continuation
                                         )
+                                        guard !Task.isCancelled else { return }
                                         continuation.yield(event)
                                     } catch {
+                                        guard !Task.isCancelled else { return }
                                         continuation.yield(.error(url: entry.url, message: error.localizedDescription, worker: workerID))
                                     }
 
                                     let count = await completed.increment()
+                                    guard !Task.isCancelled else { return }
                                     continuation.yield(.playlistProgress(completed: count, total: total))
                                 }
                             }
@@ -171,9 +191,16 @@ final class DownloadEngine {
 
                     continuation.finish()
                 } catch {
-                    continuation.yield(.error(url: url, message: error.localizedDescription, worker: nil))
-                    continuation.finish(throwing: error)
+                    if !(error is CancellationError) && !Task.isCancelled {
+                        continuation.yield(.error(url: url, message: error.localizedDescription, worker: nil))
+                        continuation.finish(throwing: error)
+                    } else {
+                        continuation.finish()
+                    }
                 }
+            }
+            continuation.onTermination = { @Sendable _ in
+                producerTask.cancel()
             }
         }
     }
