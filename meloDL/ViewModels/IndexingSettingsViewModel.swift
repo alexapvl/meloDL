@@ -14,22 +14,40 @@ final class IndexingSettingsViewModel: ObservableObject {
     @Published private(set) var databaseSizeShmBytes: Int64 = 0
     @Published private(set) var inaccessibleRoots: [String] = []
     @Published private(set) var feedbackMessage: String?
+    @Published private(set) var exactDuplicateGroups: [ExactDuplicateGroup] = []
+    @Published private(set) var isScanningExactDuplicates = false
+    @Published private(set) var exactDuplicateScanError: String?
+    @Published private(set) var isRunningSmartCleanup = false
+    @Published var showSmartCleanupConfirmation = false
+    @Published private(set) var smartCleanupSummary: SmartCleanupSummary?
+    @Published var smartCleanupKeepRule: SmartCleanupKeepRule = .oldestModified
+    @Published var isManualReviewMode = false
+    @Published private(set) var manualQueue: [ManualDuplicateGroupState] = []
+    @Published private(set) var manualCurrentIndex = 0
+    @Published private(set) var manualAppliedGroupsCount = 0
+    @Published private(set) var manualAppliedFilesCount = 0
+    @Published private(set) var manualFailedDeleteCount = 0
+    @Published private(set) var manualReclaimedBytes: Int64 = 0
+    @Published var showExactDuplicateFinder = false
     @Published var showClearDataConfirmation = false
     @Published var pendingConflict: RootConflictPrompt?
 
     private let appSettings: AppSettings
     private let store: TrackIndexStore
     private let indexer: TrackIndexer
+    private let duplicateDetectionService: DuplicateDetectionService
     private var pollingTask: Task<Void, Never>?
 
     init(
         appSettings: AppSettings,
         store: TrackIndexStore = .shared,
-        indexer: TrackIndexer = .shared
+        indexer: TrackIndexer = .shared,
+        duplicateDetectionService: DuplicateDetectionService = .shared
     ) {
         self.appSettings = appSettings
         self.store = store
         self.indexer = indexer
+        self.duplicateDetectionService = duplicateDetectionService
     }
 
     func onAppear() {
@@ -95,6 +113,218 @@ final class IndexingSettingsViewModel: ObservableObject {
         }
     }
 
+    func openExactDuplicateFinder() {
+        showExactDuplicateFinder = true
+        isManualReviewMode = false
+        refreshExactDuplicateGroups()
+    }
+
+    func reindexAfterDuplicateFinderClosed() {
+        let rootsSnapshot = roots
+        guard !rootsSnapshot.isEmpty else { return }
+        Task {
+            await indexer.reindexNow(roots: rootsSnapshot)
+            await refreshSnapshot()
+        }
+    }
+
+    func refreshExactDuplicateGroups() {
+        guard !roots.isEmpty else {
+            exactDuplicateGroups = []
+            exactDuplicateScanError = "Add at least one indexed folder before scanning."
+            return
+        }
+        guard !isScanningExactDuplicates else { return }
+
+        exactDuplicateScanError = nil
+        isScanningExactDuplicates = true
+        Task {
+            defer { isScanningExactDuplicates = false }
+            await indexer.reindexIfNeeded(roots: roots)
+            await refreshSnapshot()
+            do {
+                let groups = try await duplicateDetectionService.findExactDuplicateFileGroups()
+                exactDuplicateGroups = groups
+                smartCleanupSummary = nil
+                if isManualReviewMode {
+                    refreshManualQueueFromCurrentGroups()
+                }
+                if groups.isEmpty {
+                    feedbackMessage = "No exact duplicate files found."
+                } else {
+                    feedbackMessage = "Found \(groups.count) duplicate group(s)."
+                }
+            } catch {
+                exactDuplicateScanError = "Failed to scan duplicates: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    func runSmartCleanup() {
+        guard !isRunningSmartCleanup else { return }
+        let plan = buildSmartCleanupPlan(from: exactDuplicateGroups, keepRule: smartCleanupKeepRule)
+        guard !plan.remove.isEmpty else {
+            smartCleanupSummary = SmartCleanupSummary(
+                keptCount: plan.keep.count,
+                removedCount: 0,
+                failedCount: 0,
+                reclaimedBytes: 0
+            )
+            feedbackMessage = "Nothing to clean up."
+            return
+        }
+
+        isRunningSmartCleanup = true
+        exactDuplicateScanError = nil
+        let rootsSnapshot = roots
+
+        Task {
+            defer { isRunningSmartCleanup = false }
+
+            let removalResult = await Task.detached(priority: .userInitiated) {
+                let fileManager = FileManager.default
+                var removedCount = 0
+                var failedCount = 0
+                var reclaimedBytes: Int64 = 0
+
+                for file in plan.remove {
+                    let url = URL(fileURLWithPath: file.path)
+                    do {
+                        if fileManager.fileExists(atPath: url.path) {
+                            try fileManager.trashItem(at: url, resultingItemURL: nil)
+                            removedCount += 1
+                            if let filesize = file.filesize {
+                                reclaimedBytes += filesize
+                            }
+                        }
+                    } catch {
+                        failedCount += 1
+                    }
+                }
+
+                return (removedCount, failedCount, reclaimedBytes)
+            }.value
+
+            await indexer.reindexNow(roots: rootsSnapshot)
+            await refreshSnapshot()
+            do {
+                exactDuplicateGroups = try await duplicateDetectionService.findExactDuplicateFileGroups()
+            } catch {
+                exactDuplicateScanError = "Cleanup succeeded, but duplicate list refresh failed: \(error.localizedDescription)"
+            }
+
+            smartCleanupSummary = SmartCleanupSummary(
+                keptCount: plan.keep.count,
+                removedCount: removalResult.0,
+                failedCount: removalResult.1,
+                reclaimedBytes: removalResult.2
+            )
+
+            if removalResult.1 > 0 {
+                feedbackMessage = "Cleanup finished with partial failures."
+                exactDuplicateScanError = "Failed to move \(removalResult.1) file(s) to Trash."
+            } else {
+                feedbackMessage = "Smart cleanup removed \(removalResult.0) duplicate file(s)."
+            }
+        }
+    }
+
+    func startManualReviewSession() {
+        guard !exactDuplicateGroups.isEmpty else { return }
+        isManualReviewMode = true
+        manualQueue = exactDuplicateGroups.map { group in
+            ManualDuplicateGroupState(
+                group: group,
+                status: .pending,
+                keeperPath: defaultKeeperPath(for: group, keepRule: smartCleanupKeepRule)
+            )
+        }
+        manualCurrentIndex = 0
+        manualAppliedGroupsCount = 0
+        manualAppliedFilesCount = 0
+        manualFailedDeleteCount = 0
+        manualReclaimedBytes = 0
+    }
+
+    func exitManualReviewMode() {
+        isManualReviewMode = false
+        manualQueue = []
+        manualCurrentIndex = 0
+    }
+
+    func selectManualKeeper(path: String) {
+        guard manualQueue.indices.contains(manualCurrentIndex) else { return }
+        manualQueue[manualCurrentIndex].keeperPath = path
+    }
+
+    func moveToPreviousManualGroup() {
+        guard !manualQueue.isEmpty else { return }
+        manualCurrentIndex = max(0, manualCurrentIndex - 1)
+    }
+
+    func skipManualGroup() {
+        guard !manualQueue.isEmpty else { return }
+        manualCurrentIndex = min(max(0, manualQueue.count - 1), manualCurrentIndex + 1)
+    }
+
+    func applyCurrentManualGroup() {
+        guard manualQueue.indices.contains(manualCurrentIndex) else { return }
+        guard !isRunningSmartCleanup else { return }
+
+        let groupState = manualQueue[manualCurrentIndex]
+        guard let keeperPath = groupState.keeperPath else {
+            return
+        }
+        let filesToDelete = groupState.group.files.filter { $0.path != keeperPath }
+        guard !filesToDelete.isEmpty else {
+            manualQueue.remove(at: manualCurrentIndex)
+            manualAppliedGroupsCount += 1
+            normalizeManualCurrentIndex()
+            return
+        }
+
+        isRunningSmartCleanup = true
+        exactDuplicateScanError = nil
+
+        Task {
+            defer { isRunningSmartCleanup = false }
+            let result = await Task.detached(priority: .userInitiated) {
+                let fileManager = FileManager.default
+                var removedCount = 0
+                var failedCount = 0
+                var reclaimedBytes: Int64 = 0
+
+                for file in filesToDelete {
+                    let url = URL(fileURLWithPath: file.path)
+                    do {
+                        if fileManager.fileExists(atPath: url.path) {
+                            try fileManager.trashItem(at: url, resultingItemURL: nil)
+                            removedCount += 1
+                            reclaimedBytes += file.filesize ?? 0
+                        }
+                    } catch {
+                        failedCount += 1
+                    }
+                }
+                return (removedCount, failedCount, reclaimedBytes)
+            }.value
+
+            manualAppliedGroupsCount += 1
+            manualAppliedFilesCount += result.0
+            manualFailedDeleteCount += result.1
+            manualReclaimedBytes += result.2
+
+            let groupHash = groupState.group.contentHash
+            manualQueue.remove(at: manualCurrentIndex)
+            exactDuplicateGroups.removeAll { $0.contentHash == groupHash }
+            normalizeManualCurrentIndex()
+
+            if result.1 > 0 {
+                exactDuplicateScanError = "Failed to move \(result.1) file(s) to Trash."
+            }
+        }
+    }
+
     func chooseKeepParentForChildConflict() {
         pendingConflict = nil
         feedbackMessage = "Skipped nested folder because parent is already indexed."
@@ -122,6 +352,34 @@ final class IndexingSettingsViewModel: ObservableObject {
 
     var canUpdateIndexNow: Bool {
         !roots.isEmpty && !isIndexing
+    }
+
+    var totalExactDuplicateFiles: Int {
+        exactDuplicateGroups.reduce(0) { $0 + $1.files.count }
+    }
+
+    var smartCleanupCandidateCount: Int {
+        buildSmartCleanupPlan(from: exactDuplicateGroups, keepRule: smartCleanupKeepRule).remove.count
+    }
+
+    var smartCleanupEstimatedReclaimBytes: Int64 {
+        buildSmartCleanupPlan(from: exactDuplicateGroups, keepRule: smartCleanupKeepRule).remove.reduce(0) { partial, file in
+            partial + (file.filesize ?? 0)
+        }
+    }
+
+    var manualCurrentGroupState: ManualDuplicateGroupState? {
+        guard manualQueue.indices.contains(manualCurrentIndex) else { return nil }
+        return manualQueue[manualCurrentIndex]
+    }
+
+    var manualGroupProgressText: String {
+        guard let _ = manualCurrentGroupState else { return "No pending groups" }
+        return "Group \(manualCurrentIndex + 1) of \(max(1, manualQueue.count))"
+    }
+
+    var manualRemainingGroupsCount: Int {
+        manualQueue.count
     }
 
     private func startPolling() {
@@ -218,6 +476,94 @@ final class IndexingSettingsViewModel: ObservableObject {
         var isDirectory: ObjCBool = false
         return FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) && isDirectory.boolValue
     }
+
+    private func buildSmartCleanupPlan(
+        from groups: [ExactDuplicateGroup],
+        keepRule: SmartCleanupKeepRule
+    ) -> (keep: [ExactDuplicateFileEntry], remove: [ExactDuplicateFileEntry]) {
+        var keep: [ExactDuplicateFileEntry] = []
+        var remove: [ExactDuplicateFileEntry] = []
+
+        for group in groups {
+            let sorted = group.files.sorted { lhs, rhs in
+                switch keepRule {
+                case .newestModified:
+                    if lhs.mtime != rhs.mtime {
+                        return lhs.mtime > rhs.mtime
+                    }
+                    return lhs.path.localizedStandardCompare(rhs.path) == .orderedAscending
+                case .oldestModified:
+                    if lhs.mtime != rhs.mtime {
+                        return lhs.mtime < rhs.mtime
+                    }
+                    return lhs.path.localizedStandardCompare(rhs.path) == .orderedAscending
+                case .shortestPath:
+                    if lhs.path.count != rhs.path.count {
+                        return lhs.path.count < rhs.path.count
+                    }
+                    return lhs.path.localizedStandardCompare(rhs.path) == .orderedAscending
+                }
+            }
+            guard let keeper = sorted.first else { continue }
+            keep.append(keeper)
+            remove.append(contentsOf: sorted.dropFirst())
+        }
+        return (keep, remove)
+    }
+
+    private func defaultKeeperPath(for group: ExactDuplicateGroup, keepRule: SmartCleanupKeepRule) -> String? {
+        let sorted = group.files.sorted { lhs, rhs in
+            switch keepRule {
+            case .newestModified:
+                if lhs.mtime != rhs.mtime {
+                    return lhs.mtime > rhs.mtime
+                }
+                return lhs.path.localizedStandardCompare(rhs.path) == .orderedAscending
+            case .oldestModified:
+                if lhs.mtime != rhs.mtime {
+                    return lhs.mtime < rhs.mtime
+                }
+                return lhs.path.localizedStandardCompare(rhs.path) == .orderedAscending
+            case .shortestPath:
+                if lhs.path.count != rhs.path.count {
+                    return lhs.path.count < rhs.path.count
+                }
+                return lhs.path.localizedStandardCompare(rhs.path) == .orderedAscending
+            }
+        }
+        return sorted.first?.path
+    }
+
+    private func normalizeManualCurrentIndex() {
+        if manualQueue.isEmpty {
+            manualCurrentIndex = 0
+            return
+        }
+        manualCurrentIndex = min(max(0, manualCurrentIndex), manualQueue.count - 1)
+    }
+
+    private func refreshManualQueueFromCurrentGroups() {
+        let existingByHash = Dictionary(uniqueKeysWithValues: manualQueue.map { ($0.group.contentHash, $0) })
+        manualQueue = exactDuplicateGroups.map { group in
+            if let existing = existingByHash[group.contentHash] {
+                let fallbackKeeper = defaultKeeperPath(for: group, keepRule: smartCleanupKeepRule)
+                let keeperStillExists = existing.keeperPath.flatMap { keeper in
+                    group.files.first(where: { $0.path == keeper })?.path
+                }
+                return ManualDuplicateGroupState(
+                    group: group,
+                    status: existing.status,
+                    keeperPath: keeperStillExists ?? fallbackKeeper
+                )
+            }
+            return ManualDuplicateGroupState(
+                group: group,
+                status: .pending,
+                keeperPath: defaultKeeperPath(for: group, keepRule: smartCleanupKeepRule)
+            )
+        }
+        normalizeManualCurrentIndex()
+    }
 }
 
 enum RootConflictPrompt: Identifiable {
@@ -232,4 +578,54 @@ enum RootConflictPrompt: Identifiable {
             return "parent:\(proposedRoot):\(childRoots.joined(separator: "|"))"
         }
     }
+}
+
+struct SmartCleanupSummary: Sendable {
+    let keptCount: Int
+    let removedCount: Int
+    let failedCount: Int
+    let reclaimedBytes: Int64
+}
+
+enum SmartCleanupKeepRule: String, CaseIterable, Identifiable, Sendable {
+    case newestModified
+    case oldestModified
+    case shortestPath
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .newestModified:
+            return "Keep newest"
+        case .oldestModified:
+            return "Keep oldest"
+        case .shortestPath:
+            return "Keep shortest path"
+        }
+    }
+
+    var descriptionText: String {
+        switch self {
+        case .newestModified:
+            return "Keeps the most recently modified file in each group."
+        case .oldestModified:
+            return "Keeps the oldest modified file in each group."
+        case .shortestPath:
+            return "Keeps the file with the shortest path in each group."
+        }
+    }
+}
+
+enum ManualDuplicateGroupStatus: String, Sendable {
+    case pending
+    case skipped
+}
+
+struct ManualDuplicateGroupState: Identifiable, Sendable {
+    let group: ExactDuplicateGroup
+    var status: ManualDuplicateGroupStatus
+    var keeperPath: String?
+
+    var id: String { group.contentHash }
 }

@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import os
 
 actor TrackIndexer {
@@ -95,29 +96,42 @@ actor TrackIndexer {
 
         for case let fileURL as URL in enumerator {
             guard isAudioFile(fileURL.pathExtension) else { continue }
-            let values = try fileURL.resourceValues(forKeys: resourceKeys)
-            guard values.isRegularFile == true else { continue }
+            do {
+                let values = try fileURL.resourceValues(forKeys: resourceKeys)
+                guard values.isRegularFile == true else { continue }
 
-            let filename = values.name ?? fileURL.lastPathComponent
-            let stem = fileURL.deletingPathExtension().lastPathComponent
-            let normalizedTitle = DuplicateDetectionService.normalize(stem)
-            let filesize = values.fileSize.map(Int64.init)
-            let mtime = values.contentModificationDate ?? Date.distantPast
+                let filename = values.name ?? fileURL.lastPathComponent
+                let stem = fileURL.deletingPathExtension().lastPathComponent
+                let normalizedTitle = DuplicateDetectionService.normalize(stem)
+                let filesize = values.fileSize.map(Int64.init)
+                let mtime = values.contentModificationDate ?? Date.distantPast
+                let existingTrack = try await store.fetchTrack(atPath: fileURL.path)
+                let contentHash = try resolveContentHash(
+                    for: fileURL,
+                    filesize: filesize,
+                    mtime: mtime,
+                    existingTrack: existingTrack
+                )
+                let hashPrefix = contentHash.map { String($0.prefix(16)) }
 
-            let track = IndexedTrack(
-                path: fileURL.path,
-                rootPath: rootPath,
-                filename: filename,
-                normalizedTitle: normalizedTitle,
-                artistHint: nil,
-                durationSec: nil,
-                filesize: filesize,
-                mtime: mtime,
-                hashPrefix: nil,
-                lastSeenAt: passStartedAt
-            )
-            try await store.upsertTrack(track)
-            indexedCount += 1
+                let track = IndexedTrack(
+                    path: fileURL.path,
+                    rootPath: rootPath,
+                    filename: filename,
+                    normalizedTitle: normalizedTitle,
+                    artistHint: nil,
+                    durationSec: nil,
+                    filesize: filesize,
+                    mtime: mtime,
+                    hashPrefix: hashPrefix,
+                    contentHash: contentHash,
+                    lastSeenAt: passStartedAt
+                )
+                try await store.upsertTrack(track)
+                indexedCount += 1
+            } catch {
+                logger.warning("Skipping file during index due to error: \(fileURL.path, privacy: .public) - \(error.localizedDescription)")
+            }
         }
 
         try await store.removeStaleTracks(rootPath: rootPath, olderThan: passStartedAt)
@@ -143,5 +157,40 @@ actor TrackIndexer {
         default:
             return false
         }
+    }
+
+    private func resolveContentHash(
+        for fileURL: URL,
+        filesize: Int64?,
+        mtime: Date,
+        existingTrack: IndexedTrack?
+    ) throws -> String? {
+        if let existingTrack,
+           existingTrack.filesize == filesize,
+           abs(existingTrack.mtime.timeIntervalSince1970 - mtime.timeIntervalSince1970) < 0.5,
+           let existingHash = existingTrack.contentHash,
+           !existingHash.isEmpty {
+            return existingHash
+        }
+        return try sha256Hex(for: fileURL)
+    }
+
+    private func sha256Hex(for fileURL: URL) throws -> String? {
+        let chunkSize = 64 * 1024
+        let handle = try FileHandle(forReadingFrom: fileURL)
+        defer {
+            try? handle.close()
+        }
+
+        var hasher = SHA256()
+        while true {
+            guard let chunk = try handle.read(upToCount: chunkSize), !chunk.isEmpty else {
+                break
+            }
+            hasher.update(data: chunk)
+        }
+
+        let digest = hasher.finalize()
+        return digest.map { String(format: "%02x", $0) }.joined()
     }
 }

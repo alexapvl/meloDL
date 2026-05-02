@@ -12,7 +12,25 @@ struct IndexedTrack: Sendable {
     let filesize: Int64?
     let mtime: Date
     let hashPrefix: String?
+    let contentHash: String?
     let lastSeenAt: Date
+}
+
+struct ExactDuplicateFileEntry: Identifiable, Sendable {
+    let path: String
+    let rootPath: String
+    let filename: String
+    let filesize: Int64?
+    let mtime: Date
+
+    var id: String { path }
+}
+
+struct ExactDuplicateGroup: Identifiable, Sendable {
+    let contentHash: String
+    let files: [ExactDuplicateFileEntry]
+
+    var id: String { contentHash }
 }
 
 struct RootOverlapResult: Sendable {
@@ -282,8 +300,8 @@ actor TrackIndexStore {
 
         let sql = """
         INSERT INTO tracks(
-            path, root_path, filename, normalized_title, artist_hint, duration_sec, filesize, mtime, hash_prefix, last_seen_at
-        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            path, root_path, filename, normalized_title, artist_hint, duration_sec, filesize, mtime, hash_prefix, content_hash, last_seen_at
+        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(path) DO UPDATE SET
             root_path = excluded.root_path,
             filename = excluded.filename,
@@ -293,6 +311,7 @@ actor TrackIndexStore {
             filesize = excluded.filesize,
             mtime = excluded.mtime,
             hash_prefix = excluded.hash_prefix,
+            content_hash = excluded.content_hash,
             last_seen_at = excluded.last_seen_at;
         """
         var statement: OpaquePointer?
@@ -333,7 +352,13 @@ actor TrackIndexStore {
             sqlite3_bind_null(statement, 9)
         }
 
-        sqlite3_bind_double(statement, 10, track.lastSeenAt.timeIntervalSince1970)
+        if let contentHash = track.contentHash {
+            bindText(contentHash, to: statement, at: 10)
+        } else {
+            sqlite3_bind_null(statement, 10)
+        }
+
+        sqlite3_bind_double(statement, 11, track.lastSeenAt.timeIntervalSince1970)
 
         guard sqlite3_step(statement) == SQLITE_DONE else {
             throw makeError(message: "Failed to upsert track at path: \(track.path)")
@@ -348,7 +373,7 @@ actor TrackIndexStore {
         let firstToken = normalized.split(separator: " ").first.map(String.init) ?? normalized
         let likeToken = "%\(firstToken)%"
         let sql = """
-        SELECT path, root_path, filename, normalized_title, artist_hint, duration_sec, filesize, mtime, hash_prefix, last_seen_at
+        SELECT path, root_path, filename, normalized_title, artist_hint, duration_sec, filesize, mtime, hash_prefix, content_hash, last_seen_at
         FROM tracks
         WHERE normalized_title LIKE ?
         ORDER BY last_seen_at DESC
@@ -376,7 +401,8 @@ actor TrackIndexStore {
             let filesize = sqliteOptionalInt64(statement, column: 6)
             let mtime = Date(timeIntervalSince1970: sqlite3_column_double(statement, 7))
             let hashPrefix = sqliteOptionalText(statement, column: 8)
-            let lastSeenAt = Date(timeIntervalSince1970: sqlite3_column_double(statement, 9))
+            let contentHash = sqliteOptionalText(statement, column: 9)
+            let lastSeenAt = Date(timeIntervalSince1970: sqlite3_column_double(statement, 10))
 
             results.append(IndexedTrack(
                 path: path,
@@ -388,10 +414,94 @@ actor TrackIndexStore {
                 filesize: filesize,
                 mtime: mtime,
                 hashPrefix: hashPrefix,
+                contentHash: contentHash,
                 lastSeenAt: lastSeenAt
             ))
         }
         return results
+    }
+
+    func fetchTrack(atPath path: String) throws -> IndexedTrack? {
+        try ensureReady()
+        let canonicalPath = Self.canonicalize(path: path)
+        guard !canonicalPath.isEmpty else { return nil }
+
+        let sql = """
+        SELECT path, root_path, filename, normalized_title, artist_hint, duration_sec, filesize, mtime, hash_prefix, content_hash, last_seen_at
+        FROM tracks
+        WHERE path = ?
+        LIMIT 1;
+        """
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+
+        guard sqlite3_prepare_v2(try database, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw makeError(message: "Failed to prepare track fetch query")
+        }
+        bindText(canonicalPath, to: statement, at: 1)
+
+        guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
+        return IndexedTrack(
+            path: sqliteText(statement, column: 0),
+            rootPath: sqliteText(statement, column: 1),
+            filename: sqliteText(statement, column: 2),
+            normalizedTitle: sqliteText(statement, column: 3),
+            artistHint: sqliteOptionalText(statement, column: 4),
+            durationSec: sqliteOptionalDouble(statement, column: 5),
+            filesize: sqliteOptionalInt64(statement, column: 6),
+            mtime: Date(timeIntervalSince1970: sqlite3_column_double(statement, 7)),
+            hashPrefix: sqliteOptionalText(statement, column: 8),
+            contentHash: sqliteOptionalText(statement, column: 9),
+            lastSeenAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 10))
+        )
+    }
+
+    func fetchExactDuplicateGroups(limit: Int = 300) throws -> [ExactDuplicateGroup] {
+        try ensureReady()
+        let sql = """
+        WITH duplicate_hashes AS (
+            SELECT content_hash
+            FROM tracks
+            WHERE content_hash IS NOT NULL AND content_hash != ''
+            GROUP BY content_hash
+            HAVING COUNT(*) > 1
+            ORDER BY COUNT(*) DESC
+            LIMIT ?
+        )
+        SELECT t.content_hash, t.path, t.root_path, t.filename, t.filesize, t.mtime
+        FROM tracks t
+        INNER JOIN duplicate_hashes d ON t.content_hash = d.content_hash
+        ORDER BY t.content_hash ASC, t.filename COLLATE NOCASE ASC, t.path ASC;
+        """
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+
+        guard sqlite3_prepare_v2(try database, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw makeError(message: "Failed to prepare exact duplicate groups query")
+        }
+        sqlite3_bind_int64(statement, 1, Int64(max(1, limit)))
+
+        var grouped: [String: [ExactDuplicateFileEntry]] = [:]
+        var hashOrder: [String] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let hash = sqliteOptionalText(statement, column: 0), !hash.isEmpty else { continue }
+            if grouped[hash] == nil {
+                grouped[hash] = []
+                hashOrder.append(hash)
+            }
+            grouped[hash, default: []].append(ExactDuplicateFileEntry(
+                path: sqliteText(statement, column: 1),
+                rootPath: sqliteText(statement, column: 2),
+                filename: sqliteText(statement, column: 3),
+                filesize: sqliteOptionalInt64(statement, column: 4),
+                mtime: Date(timeIntervalSince1970: sqlite3_column_double(statement, 5))
+            ))
+        }
+
+        return hashOrder.compactMap { hash in
+            guard let files = grouped[hash], files.count > 1 else { return nil }
+            return ExactDuplicateGroup(contentHash: hash, files: files)
+        }
     }
 
     func seedDefaultRootIfNeeded(_ rootPath: String) throws {
@@ -459,9 +569,16 @@ actor TrackIndexStore {
             filesize INTEGER,
             mtime REAL NOT NULL,
             hash_prefix TEXT,
+            content_hash TEXT,
             last_seen_at REAL NOT NULL
         );
         """)
+
+        try ensureColumnExists(
+            table: "tracks",
+            column: "content_hash",
+            definition: "TEXT"
+        )
 
         try execute(sql: """
         CREATE INDEX IF NOT EXISTS idx_tracks_normalized_title
@@ -475,12 +592,38 @@ actor TrackIndexStore {
         CREATE INDEX IF NOT EXISTS idx_tracks_last_seen_at
         ON tracks(last_seen_at);
         """)
+        try execute(sql: """
+        CREATE INDEX IF NOT EXISTS idx_tracks_content_hash
+        ON tracks(content_hash);
+        """)
     }
 
     private func execute(sql: String) throws {
         guard sqlite3_exec(try database, sql, nil, nil, nil) == SQLITE_OK else {
             throw makeError(message: "SQLite exec failed for query: \(sql)")
         }
+    }
+
+    private func ensureColumnExists(table: String, column: String, definition: String) throws {
+        if try hasColumn(table: table, column: column) { return }
+        try execute(sql: "ALTER TABLE \(table) ADD COLUMN \(column) \(definition);")
+    }
+
+    private func hasColumn(table: String, column: String) throws -> Bool {
+        let sql = "PRAGMA table_info(\(table));"
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+
+        guard sqlite3_prepare_v2(try database, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw makeError(message: "Failed to inspect table info for \(table)")
+        }
+
+        while sqlite3_step(statement) == SQLITE_ROW {
+            if let name = sqlite3_column_text(statement, 1), String(cString: name) == column {
+                return true
+            }
+        }
+        return false
     }
 
     private func makeError(message: String) -> TrackIndexError {

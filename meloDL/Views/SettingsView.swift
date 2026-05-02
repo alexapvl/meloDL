@@ -290,10 +290,21 @@ struct IndexingSettingsView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: SettingsLayout.pageSpacing) {
                     SettingsSection(title: "Duplicate Detection") {
-                        SettingsToggleRow(
-                            title: "Enable duplicate detection before download",
-                            isOn: $appSettings.duplicateDetectionEnabled
-                        )
+                        VStack(alignment: .leading, spacing: SettingsLayout.rowSpacing) {
+                            SettingsToggleRow(
+                                title: "Enable duplicate detection before download",
+                                isOn: $appSettings.duplicateDetectionEnabled
+                            )
+
+                            Button("Find Duplicate Files in Index") {
+                                viewModel.openExactDuplicateFinder()
+                            }
+                            .disabled(viewModel.roots.isEmpty || viewModel.isIndexing)
+
+                            Text("Shows exact duplicate files grouped by content hash and full path.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
 
                     SettingsSection(title: "Index Status") {
@@ -418,7 +429,7 @@ struct IndexingSettingsView: View {
 
                                 Spacer(minLength: 0)
 
-                                Text("Tip: You can drag and drop folders into this list to add them.")
+                                Text("Tip: Drag and drop folders into this list to add them.")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
@@ -487,6 +498,14 @@ struct IndexingSettingsView: View {
                 Text("")
             }
         }
+        .sheet(isPresented: $viewModel.showExactDuplicateFinder) {
+            ExactDuplicateFinderSheet(viewModel: viewModel)
+        }
+        .onChange(of: viewModel.showExactDuplicateFinder) { wasPresented, isPresented in
+            if wasPresented && !isPresented {
+                viewModel.reindexAfterDuplicateFinderClosed()
+            }
+        }
     }
 
     private var lastIndexedText: String {
@@ -521,6 +540,306 @@ struct IndexingSettingsView: View {
             }
         }
         return true
+    }
+}
+
+private struct ExactDuplicateFinderSheet: View {
+    @ObservedObject var viewModel: IndexingSettingsViewModel
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Exact Duplicate Files")
+                        .font(.title3.bold())
+                    Text("\(viewModel.exactDuplicateGroups.count) groups, \(viewModel.totalExactDuplicateFiles) files")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+            }
+
+            if viewModel.isScanningExactDuplicates || viewModel.isRunningSmartCleanup {
+                ProgressView(viewModel.isRunningSmartCleanup ? "Running smart cleanup..." : "Scanning indexed files...")
+                    .controlSize(.small)
+            } else if let exactDuplicateScanError = viewModel.exactDuplicateScanError {
+                Text(exactDuplicateScanError)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+
+            if let smartCleanupSummary = viewModel.smartCleanupSummary {
+                Text(cleanupSummaryText(for: smartCleanupSummary))
+                    .font(.caption)
+                    .foregroundStyle(smartCleanupSummary.failedCount > 0 ? .orange : .secondary)
+            }
+
+            if !viewModel.isScanningExactDuplicates && !viewModel.isRunningSmartCleanup {
+                if viewModel.isManualReviewMode {
+                    manualReviewContent
+                } else if viewModel.exactDuplicateGroups.isEmpty {
+                    ContentUnavailableView(
+                        "No Exact Duplicates",
+                        systemImage: "checkmark.circle",
+                        description: Text("No files in your index share identical content.")
+                    )
+                } else {
+                    List {
+                        ForEach(viewModel.exactDuplicateGroups) { group in
+                            Section {
+                                ForEach(group.files) { file in
+                                    HStack(alignment: .top, spacing: 10) {
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text(file.filename)
+                                                .font(.body)
+                                            Text(file.path)
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                                .textSelection(.enabled)
+                                        metadataLabel(for: file)
+                                                .font(.caption2)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                        Spacer(minLength: 0)
+                                        Button("Preview") {
+                                            TrackPreviewService.shared.previewTrack(
+                                                atPath: file.path,
+                                                title: file.filename
+                                            )
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .controlSize(.small)
+                                    }
+                                    .contextMenu {
+                                        Button("Copy Path") {
+                                            copyPath(file.path)
+                                        }
+                                        Button("Reveal in Finder") {
+                                            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: file.path)])
+                                        }
+                                    }
+                                }
+                            } header: {
+                                Text("Hash \(group.contentHash.prefix(12))... (\(group.files.count) files)")
+                            }
+                        }
+                    }
+                    .listStyle(.inset)
+                }
+            }
+
+            Spacer(minLength: 0)
+            Divider()
+            bottomActionBar
+        }
+        .padding(16)
+        .frame(minWidth: 760, minHeight: 460, alignment: .topLeading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .task(id: viewModel.showExactDuplicateFinder) {
+            if viewModel.showExactDuplicateFinder && viewModel.exactDuplicateGroups.isEmpty {
+                viewModel.refreshExactDuplicateGroups()
+            }
+        }
+        .alert("Run Smart Cleanup?", isPresented: $viewModel.showSmartCleanupConfirmation) {
+            Button("Cancel", role: .cancel) {}
+            Button("Move Duplicates to Trash", role: .destructive) {
+                viewModel.runSmartCleanup()
+            }
+        } message: {
+            Text(
+                """
+                \(viewModel.smartCleanupKeepRule.descriptionText)
+                All other files in each duplicate group will be moved to Trash.
+                Files to remove: \(viewModel.smartCleanupCandidateCount)
+                Estimated space reclaimed: \(ByteCountFormatter.string(fromByteCount: viewModel.smartCleanupEstimatedReclaimBytes, countStyle: .file))
+                """
+            )
+        }
+    }
+
+    private func metadataLabel(for file: ExactDuplicateFileEntry) -> Text {
+        let sizeText = file.filesize.map { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) } ?? "Unknown size"
+        let dateText = file.mtime == .distantPast
+            ? "Unknown"
+            : file.mtime.formatted(date: .abbreviated, time: .shortened)
+        return Text("Size: ").bold()
+            + Text(sizeText)
+            + Text(" | ")
+            + Text("Date added: ").bold()
+            + Text(dateText)
+    }
+
+    @ViewBuilder
+    private var manualReviewContent: some View {
+        if let state = viewModel.manualCurrentGroupState {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(viewModel.manualGroupProgressText)
+                            .font(.headline)
+                        Text(manualStatsText)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 0)
+                }
+
+                Text("Select one keeper. Other files will be moved to Trash when you confirm.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                List {
+                    Section {
+                        ForEach(state.group.files) { file in
+                            let isSelectedKeeper = state.keeperPath == file.path
+                            HStack(alignment: .top, spacing: 10) {
+                                Button {
+                                    viewModel.selectManualKeeper(path: file.path)
+                                } label: {
+                                    Image(systemName: isSelectedKeeper ? "largecircle.fill.circle" : "circle")
+                                        .foregroundStyle(isSelectedKeeper ? Color.accentColor : .secondary)
+                                }
+                                .buttonStyle(.plain)
+                                .help("Set as keeper")
+
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(file.filename)
+                                        .font(.body)
+                                    Text(file.path)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .textSelection(.enabled)
+                                    metadataLabel(for: file)
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer(minLength: 0)
+                                Button("Preview") {
+                                    TrackPreviewService.shared.previewTrack(
+                                        atPath: file.path,
+                                        title: file.filename
+                                    )
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                            }
+                            .padding(8)
+                            .background(
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .fill(isSelectedKeeper ? Color.accentColor.opacity(0.12) : Color.clear)
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .stroke(isSelectedKeeper ? Color.accentColor.opacity(0.28) : Color.clear, lineWidth: 1)
+                            )
+                            .contentShape(.rect)
+                            .onTapGesture {
+                                viewModel.selectManualKeeper(path: file.path)
+                            }
+                        }
+                    } header: {
+                        Text("Hash \(state.group.contentHash.prefix(12))... (\(state.group.files.count) files)")
+                    }
+                }
+                .listStyle(.inset)
+            }
+        } else {
+            ContentUnavailableView(
+                "Manual Review Complete",
+                systemImage: "checkmark.circle",
+                description: Text("No more duplicate groups to process in this session.")
+            )
+        }
+    }
+
+    private var manualStatsText: String {
+        let reclaimed = ByteCountFormatter.string(fromByteCount: viewModel.manualReclaimedBytes, countStyle: .file)
+        return "Applied groups: \(viewModel.manualAppliedGroupsCount) | Removed files: \(viewModel.manualAppliedFilesCount) | Failed: \(viewModel.manualFailedDeleteCount) | Reclaimed: \(reclaimed) | Remaining groups: \(viewModel.manualRemainingGroupsCount)"
+    }
+
+    @ViewBuilder
+    private var bottomActionBar: some View {
+        HStack(spacing: 10) {
+            if viewModel.isManualReviewMode {
+                Button("Previous") {
+                    viewModel.moveToPreviousManualGroup()
+                }
+                .disabled(viewModel.manualCurrentIndex == 0 || viewModel.isRunningSmartCleanup)
+
+                Button("Skip") {
+                    viewModel.skipManualGroup()
+                }
+                .disabled(viewModel.manualCurrentIndex >= viewModel.manualRemainingGroupsCount - 1 || viewModel.isRunningSmartCleanup)
+
+                Button("Keep Selected, Trash Others") {
+                    viewModel.applyCurrentManualGroup()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(viewModel.manualCurrentGroupState == nil || viewModel.isRunningSmartCleanup)
+            } else {
+                Button("Refresh Scan") {
+                    viewModel.refreshExactDuplicateGroups()
+                }
+                .disabled(viewModel.isScanningExactDuplicates || viewModel.isRunningSmartCleanup)
+
+                Picker("Keep rule", selection: $viewModel.smartCleanupKeepRule) {
+                    ForEach(SmartCleanupKeepRule.allCases) { rule in
+                        Text(rule.title).tag(rule)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .disabled(viewModel.isRunningSmartCleanup)
+
+                Button("Manual Review") {
+                    viewModel.startManualReviewSession()
+                }
+                .disabled(
+                    viewModel.exactDuplicateGroups.isEmpty
+                    || viewModel.isScanningExactDuplicates
+                    || viewModel.isRunningSmartCleanup
+                )
+
+                Button("Smart Cleanup...") {
+                    viewModel.showSmartCleanupConfirmation = true
+                }
+                .disabled(
+                    viewModel.exactDuplicateGroups.isEmpty
+                    || viewModel.isScanningExactDuplicates
+                    || viewModel.isRunningSmartCleanup
+                    || viewModel.isIndexing
+                )
+            }
+
+            Spacer(minLength: 0)
+
+            if viewModel.isManualReviewMode {
+                Button("Back") {
+                    viewModel.exitManualReviewMode()
+                }
+                .disabled(viewModel.isRunningSmartCleanup)
+            } else {
+                Button("Close") {
+                    dismiss()
+                }
+                .keyboardShortcut(.cancelAction)
+                .disabled(viewModel.isRunningSmartCleanup)
+            }
+        }
+    }
+
+    private func copyPath(_ path: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(path, forType: .string)
+    }
+
+    private func cleanupSummaryText(for summary: SmartCleanupSummary) -> String {
+        let reclaimed = ByteCountFormatter.string(fromByteCount: summary.reclaimedBytes, countStyle: .file)
+        if summary.failedCount > 0 {
+            return "Cleanup removed \(summary.removedCount) files, failed \(summary.failedCount), kept \(summary.keptCount), reclaimed \(reclaimed)."
+        }
+        return "Cleanup removed \(summary.removedCount) files, kept \(summary.keptCount), reclaimed \(reclaimed)."
     }
 }
 

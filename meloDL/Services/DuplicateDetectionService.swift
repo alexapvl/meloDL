@@ -78,6 +78,12 @@ actor DuplicateDetectionService {
         return topMatches
     }
 
+    func findExactDuplicateFileGroups(limit: Int = 300) async throws -> [ExactDuplicateGroup] {
+        let groups = try await indexStore.fetchExactDuplicateGroups(limit: limit)
+        logger.info("Exact duplicate scan produced \(groups.count) grouped duplicate hash(es)")
+        return groups
+    }
+
     static func normalize(_ input: String) -> String {
         let lowered = input
             .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
