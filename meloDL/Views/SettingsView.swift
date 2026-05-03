@@ -250,6 +250,15 @@ struct BehaviorSettingsView: View {
                         }
                     }
 
+                    SettingsSection(title: "Duplicate Review") {
+                        VStack(alignment: .leading, spacing: SettingsLayout.rowSpacing) {
+                            SettingsToggleRow(
+                                title: "Show duplicate review gesture tip",
+                                isOn: $appSettings.showDuplicateReviewGestureTip
+                            )
+                        }
+                    }
+
                     SettingsSection(title: "App Mode") {
                         VStack(alignment: .leading, spacing: SettingsLayout.rowSpacing) {
                             SettingsToggleRow(

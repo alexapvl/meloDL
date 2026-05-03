@@ -41,6 +41,9 @@ final class AppSettings: ObservableObject {
     @Published var onboardingCompleted: Bool {
         didSet { defaults.set(onboardingCompleted, forKey: Keys.onboardingCompleted) }
     }
+    @Published var showDuplicateReviewGestureTip: Bool {
+        didSet { defaults.set(showDuplicateReviewGestureTip, forKey: Keys.showDuplicateReviewGestureTip) }
+    }
 
     private let defaults: UserDefaults
 
@@ -128,6 +131,12 @@ final class AppSettings: ObservableObject {
         } else {
             onboardingCompleted = false
         }
+
+        if defaults.object(forKey: Keys.showDuplicateReviewGestureTip) != nil {
+            showDuplicateReviewGestureTip = defaults.bool(forKey: Keys.showDuplicateReviewGestureTip)
+        } else {
+            showDuplicateReviewGestureTip = true
+        }
     }
 
     var audioSettings: AudioSettings {
@@ -164,5 +173,6 @@ final class AppSettings: ObservableObject {
         static let duplicateDetectionEnabled = "settings.duplicateDetectionEnabled"
         static let duplicateIndexRoots = "settings.duplicateIndexRoots"
         static let onboardingCompleted = "settings.onboardingCompleted"
+        static let showDuplicateReviewGestureTip = "settings.showDuplicateReviewGestureTip"
     }
 }

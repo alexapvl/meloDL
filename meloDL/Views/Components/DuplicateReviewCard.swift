@@ -132,6 +132,7 @@ struct DuplicateReviewCard: View {
                     style: StrokeStyle(lineWidth: 5, lineCap: .round)
                 )
                 .rotationEffect(.degrees(-90))
+                .scaleEffect(x: currentOffsetX < 0 ? -1 : 1, y: 1)
                 .frame(width: 70, height: 70)
                 .transaction { transaction in
                     transaction.animation = isCommitAnimating

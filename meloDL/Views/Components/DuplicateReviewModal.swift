@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct DuplicateReviewModal: View {
+    @ObservedObject var appSettings: AppSettings
     let items: [DuplicateReviewItem]
     let currentIndex: Int
     let onSkipCurrent: () -> Void
@@ -19,6 +20,10 @@ struct DuplicateReviewModal: View {
 
             VStack(spacing: 18) {
                 header
+                if appSettings.showDuplicateReviewGestureTip {
+                    swipeTipBanner
+                        .allowsHitTesting(false)
+                }
 
                 if let currentItem = activeItem {
                     DuplicateReviewCard(
@@ -66,5 +71,30 @@ struct DuplicateReviewModal: View {
                 .buttonStyle(.bordered)
                 .tint(.white.opacity(0.8))
         }
+    }
+
+    private var swipeTipBanner: some View {
+        HStack(spacing: 12) {
+            SwipeGestureTipAnimationView()
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Tip")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.85))
+                Text("Swipe with two fingers or drag the card sideways while holding click. You can disable this tip in Settings > Behavior.")
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.92))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color.white.opacity(0.18), lineWidth: 1)
+        )
+        .frame(maxWidth: 680)
+        .transition(.opacity.combined(with: .move(edge: .top)))
     }
 }

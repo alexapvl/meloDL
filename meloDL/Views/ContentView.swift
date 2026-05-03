@@ -89,6 +89,7 @@ struct ContentView: View {
 
             if viewModel.isShowingDuplicateReview {
                 DuplicateReviewModal(
+                    appSettings: appSettings,
                     items: viewModel.duplicateReviewItems,
                     currentIndex: viewModel.duplicateReviewIndex,
                     onSkipCurrent: viewModel.duplicateReviewSkipCurrent,
