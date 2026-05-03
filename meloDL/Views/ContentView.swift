@@ -56,7 +56,8 @@ struct ContentView: View {
                     DownloadButtonView(
                         isDownloading: viewModel.isDownloading,
                         isCheckingDuplicates: viewModel.isCheckingDuplicates,
-                    isAnalyzingPlaylist: viewModel.isAnalyzingPlaylist,
+                        isAnalyzingPlaylist: viewModel.isAnalyzingPlaylist,
+                        isIndexingTracks: viewModel.isIndexingTracks,
                         canDownload: viewModel.canDownload,
                         downloadAction: viewModel.downloadVideo,
                         cancelAction: viewModel.cancelDownloads

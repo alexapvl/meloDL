@@ -15,27 +15,21 @@ actor TrackIndexer {
     private let lastIndexKey = "duplicateIndex.lastSuccessfulReindexAt"
     private let reindexInterval: TimeInterval = 24 * 60 * 60
     private var isIndexing = false
+    private var pendingRoots: Set<String> = []
+    private var pendingForcedPass = false
 
     init(store: TrackIndexStore = .shared) {
         self.store = store
     }
 
     func reindexIfNeeded(roots: [String]) async {
-        guard !isIndexing else { return }
         let canonicalRoots = canonicalizeRoots(roots)
         guard !canonicalRoots.isEmpty else { return }
-
-        let lastIndex = defaults.double(forKey: lastIndexKey)
-        let shouldRun = lastIndex <= 0 || Date().timeIntervalSince1970 - lastIndex >= reindexInterval
-        if !shouldRun {
-            do {
-                let count = try await store.countTracks()
-                if count > 0 { return }
-            } catch {
-                logger.error("Failed to count tracks before reindex decision: \(error.localizedDescription)")
-            }
+        guard !isIndexing else {
+            pendingRoots.formUnion(canonicalRoots)
+            return
         }
-        await reindexNow(roots: canonicalRoots)
+        await runReindexLoop(initialRoots: canonicalRoots, forceFirstPass: false)
     }
 
     struct IndexStatus: Sendable {
@@ -50,28 +44,66 @@ actor TrackIndexer {
     }
 
     func reindexNow(roots: [String]) async {
-        guard !isIndexing else { return }
         let canonicalRoots = canonicalizeRoots(roots)
         guard !canonicalRoots.isEmpty else { return }
+        guard !isIndexing else {
+            pendingRoots.formUnion(canonicalRoots)
+            pendingForcedPass = true
+            return
+        }
 
+        await runReindexLoop(initialRoots: canonicalRoots, forceFirstPass: true)
+    }
+
+    private func runReindexLoop(initialRoots: [String], forceFirstPass: Bool) async {
         isIndexing = true
         defer { isIndexing = false }
-        let passStartedAt = Date()
+        var roots = initialRoots
+        var forcePass = forceFirstPass
 
-        do {
-            try await store.ensureReady()
-            try await store.replaceRoots(with: canonicalRoots)
-            try await store.removeTracksOutsideRoots(canonicalRoots)
+        while true {
+            let shouldRunPass: Bool
+            if forcePass {
+                shouldRunPass = true
+            } else {
+                shouldRunPass = await shouldRunIfNeeded()
+            }
+            if shouldRunPass {
+                let passStartedAt = Date()
+                do {
+                    try await store.ensureReady()
+                    try await store.replaceRoots(with: roots)
+                    try await store.removeTracksOutsideRoots(roots)
 
-            var indexedCount = 0
-            for root in canonicalRoots {
-                indexedCount += try await reindexRoot(rootPath: root, passStartedAt: passStartedAt)
+                    var indexedCount = 0
+                    for root in roots {
+                        indexedCount += try await reindexRoot(rootPath: root, passStartedAt: passStartedAt)
+                    }
+
+                    defaults.set(Date().timeIntervalSince1970, forKey: lastIndexKey)
+                    logger.info("Reindex finished. Indexed \(indexedCount) files across \(roots.count) roots.")
+                } catch {
+                    logger.error("Reindex failed: \(error.localizedDescription)")
+                }
             }
 
-            defaults.set(Date().timeIntervalSince1970, forKey: lastIndexKey)
-            logger.info("Reindex finished. Indexed \(indexedCount) files across \(canonicalRoots.count) roots.")
+            guard !pendingRoots.isEmpty else { break }
+            roots = Array(pendingRoots).sorted()
+            pendingRoots.removeAll()
+            forcePass = pendingForcedPass
+            pendingForcedPass = false
+        }
+    }
+
+    private func shouldRunIfNeeded() async -> Bool {
+        let lastIndex = defaults.double(forKey: lastIndexKey)
+        let intervalElapsed = lastIndex <= 0 || Date().timeIntervalSince1970 - lastIndex >= reindexInterval
+        if intervalElapsed { return true }
+        do {
+            return try await store.countTracks() == 0
         } catch {
-            logger.error("Reindex failed: \(error.localizedDescription)")
+            logger.error("Failed to count tracks before reindex decision: \(error.localizedDescription)")
+            return true
         }
     }
 

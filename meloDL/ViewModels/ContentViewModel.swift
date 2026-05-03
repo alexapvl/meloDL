@@ -27,18 +27,21 @@ class ContentViewModel: ObservableObject {
     private var startupLogged = false
     @Published private(set) var isCheckingDuplicates = false
     @Published private(set) var isAnalyzingPlaylist = false
+    @Published private(set) var isIndexingTracks = false
     private var cancellationRequested = false
     private var duplicateReviewDecisions: [UUID: DuplicateReviewDecision] = [:]
     private var pendingSingleDuplicateContext: (url: String, title: String)?
     private var pendingPlaylistEntries: [PlaylistEntry] = []
     private var pendingPlaylistSkippedItems: [DownloadItem] = []
+    private var indexerStatusTask: Task<Void, Never>?
+    private var postDownloadReindexTask: Task<Void, Never>?
 
     init(appSettings: AppSettings) {
         self.appSettings = appSettings
     }
 
     var canDownload: Bool {
-        !url.isEmptyOrWhitespace && !isDownloading && !isCheckingDuplicates
+        !url.isEmptyOrWhitespace && !isDownloading && !isCheckingDuplicates && !isIndexingTracks
     }
 
     var statusColor: Color {
@@ -54,6 +57,7 @@ class ContentViewModel: ObservableObject {
     // MARK: - Lifecycle
 
     func onAppear() {
+        startIndexerStatusPollingIfNeeded()
         Task {
             await bootstrapBinaries()
         }
@@ -65,7 +69,6 @@ class ContentViewModel: ObservableObject {
             do {
                 try await TrackIndexStore.shared.ensureReady(defaultRootPath: appSettings.downloadFolderPath)
                 try await TrackIndexStore.shared.replaceRoots(with: appSettings.duplicateIndexRoots)
-                await TrackIndexer.shared.reindexIfNeeded(roots: appSettings.duplicateIndexRoots)
             } catch {
                 logger.warning("Duplicate index bootstrap failed: \(error.localizedDescription)")
             }
@@ -107,6 +110,8 @@ class ContentViewModel: ObservableObject {
         guard canDownload else {
             if url.isEmptyOrWhitespace {
                 statusMessage = "Please enter a URL."
+            } else if isIndexingTracks {
+                statusMessage = "Indexing tracks in progress..."
             }
             return
         }
@@ -159,6 +164,8 @@ class ContentViewModel: ObservableObject {
         pendingSingleDuplicateContext = nil
         pendingPlaylistEntries = []
         pendingPlaylistSkippedItems = []
+        postDownloadReindexTask?.cancel()
+        postDownloadReindexTask = nil
         statusMessage = "Cancelled"
         downloadRequestedAt = nil
         startupLogged = false
@@ -189,6 +196,8 @@ class ContentViewModel: ObservableObject {
         pendingSingleDuplicateContext = nil
         pendingPlaylistEntries = []
         pendingPlaylistSkippedItems = []
+        postDownloadReindexTask?.cancel()
+        postDownloadReindexTask = nil
         isCheckingDuplicates = false
         isAnalyzingPlaylist = false
         isDownloading = false
@@ -404,6 +413,7 @@ class ContentViewModel: ObservableObject {
             if let idx = indexForURL(sourceURL) {
                 downloads[idx].status = .completed(filepath: filepath)
             }
+            schedulePostDownloadReindex()
             if playlistTotalCount <= 1 {
                 statusMessage = "Download finished"
                 maybeSendCompletionNotification()
@@ -485,6 +495,33 @@ class ContentViewModel: ObservableObject {
         duplicateReviewIndex = 0
         duplicateReviewDecisions = [:]
         isShowingDuplicateReview = true
+    }
+
+    private func startIndexerStatusPollingIfNeeded() {
+        guard indexerStatusTask == nil else { return }
+        indexerStatusTask = Task { [weak self] in
+            while let self, !Task.isCancelled {
+                let status = await TrackIndexer.shared.status()
+                self.isIndexingTracks = status.isIndexing
+                try? await Task.sleep(nanoseconds: 400_000_000)
+            }
+        }
+    }
+
+    private func schedulePostDownloadReindex() {
+        let rootsSnapshot = appSettings.duplicateIndexRoots
+        guard !rootsSnapshot.isEmpty else { return }
+        postDownloadReindexTask?.cancel()
+        postDownloadReindexTask = Task {
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            guard !Task.isCancelled else { return }
+            await TrackIndexer.shared.reindexNow(roots: rootsSnapshot)
+        }
+    }
+
+    deinit {
+        indexerStatusTask?.cancel()
+        postDownloadReindexTask?.cancel()
     }
 
     private func applyDecisionForCurrentItem(_ decision: DuplicateReviewDecision) {

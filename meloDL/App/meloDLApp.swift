@@ -18,6 +18,7 @@ private enum SettingsKeys {
 struct meloDLApp: App {
     @StateObject private var appSettings = AppSettings()
     @State private var menuBarController: MenuBarController?
+    @State private var didTriggerLaunchReindex = false
     private let notificationDelegate = DownloadNotificationCenterDelegate()
     private let launchMenubarOnlyMode: Bool
     private let updaterController = SPUStandardUpdaterController(
@@ -60,6 +61,7 @@ struct meloDLApp: App {
                 Color.clear
                     .frame(width: 0, height: 0)
                     .onAppear {
+                        triggerLaunchReindexIfNeeded()
                         configureMenuBarControllerIfNeeded()
                         DispatchQueue.main.async {
                             for window in NSApplication.shared.windows where window.level == .normal {
@@ -81,6 +83,7 @@ struct meloDLApp: App {
                     }
                 }
                 .onAppear {
+                    triggerLaunchReindexIfNeeded()
                     menuBarController = nil
                     focusMainWindowIfNeeded()
                 }
@@ -149,6 +152,15 @@ struct meloDLApp: App {
             onSwitchToDockMode: switchToDockMode,
             onQuit: quitApp
         )
+    }
+
+    private func triggerLaunchReindexIfNeeded() {
+        guard !didTriggerLaunchReindex else { return }
+        didTriggerLaunchReindex = true
+        let rootsSnapshot = appSettings.duplicateIndexRoots
+        Task.detached(priority: .utility) {
+            await TrackIndexer.shared.reindexNow(roots: rootsSnapshot)
+        }
     }
 }
 

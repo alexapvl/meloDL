@@ -4,6 +4,7 @@ struct DownloadButtonView: View {
     let isDownloading: Bool
     let isCheckingDuplicates: Bool
     let isAnalyzingPlaylist: Bool
+    let isIndexingTracks: Bool
     let canDownload: Bool
     let downloadAction: () -> Void
     let cancelAction: () -> Void
@@ -14,6 +15,9 @@ struct DownloadButtonView: View {
                 if isCheckingDuplicates || isAnalyzingPlaylist {
                     ProgressView()
                         .controlSize(.small)
+                } else if isIndexingTracks && !isDownloading {
+                    ProgressView()
+                        .controlSize(.small)
                 } else if isDownloading {
                     Image(systemName: "xmark.circle")
                 }
@@ -21,7 +25,7 @@ struct DownloadButtonView: View {
             }
             .frame(maxWidth: .infinity)
         }
-        .disabled(isCheckingDuplicates || isAnalyzingPlaylist || (!isDownloading && !canDownload))
+        .disabled(isCheckingDuplicates || isAnalyzingPlaylist || (!isDownloading && (!canDownload || isIndexingTracks)))
         .buttonStyle(.borderedProminent)
         .controlSize(.large)
     }
@@ -29,6 +33,7 @@ struct DownloadButtonView: View {
     private var buttonTitle: String {
         if isCheckingDuplicates { return "Checking duplicates..." }
         if isAnalyzingPlaylist { return "Analyzing playlist..." }
+        if isIndexingTracks && !isDownloading { return "Indexing tracks in progress..." }
         if isDownloading { return "Cancel download" }
         return "Download"
     }
@@ -36,10 +41,11 @@ struct DownloadButtonView: View {
 
 #Preview {
     VStack(spacing: 20) {
-        DownloadButtonView(isDownloading: false, isCheckingDuplicates: false, isAnalyzingPlaylist: false, canDownload: true, downloadAction: {}, cancelAction: {})
-        DownloadButtonView(isDownloading: true, isCheckingDuplicates: false, isAnalyzingPlaylist: false, canDownload: false, downloadAction: {}, cancelAction: {})
-        DownloadButtonView(isDownloading: false, isCheckingDuplicates: true, isAnalyzingPlaylist: false, canDownload: false, downloadAction: {}, cancelAction: {})
-        DownloadButtonView(isDownloading: true, isCheckingDuplicates: false, isAnalyzingPlaylist: true, canDownload: false, downloadAction: {}, cancelAction: {})
+        DownloadButtonView(isDownloading: false, isCheckingDuplicates: false, isAnalyzingPlaylist: false, isIndexingTracks: false, canDownload: true, downloadAction: {}, cancelAction: {})
+        DownloadButtonView(isDownloading: false, isCheckingDuplicates: false, isAnalyzingPlaylist: false, isIndexingTracks: true, canDownload: false, downloadAction: {}, cancelAction: {})
+        DownloadButtonView(isDownloading: true, isCheckingDuplicates: false, isAnalyzingPlaylist: false, isIndexingTracks: false, canDownload: false, downloadAction: {}, cancelAction: {})
+        DownloadButtonView(isDownloading: false, isCheckingDuplicates: true, isAnalyzingPlaylist: false, isIndexingTracks: false, canDownload: false, downloadAction: {}, cancelAction: {})
+        DownloadButtonView(isDownloading: true, isCheckingDuplicates: false, isAnalyzingPlaylist: true, isIndexingTracks: false, canDownload: false, downloadAction: {}, cancelAction: {})
     }
     .padding()
 }
