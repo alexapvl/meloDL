@@ -8,9 +8,14 @@
 
 ## What it does
 
-- Accepts a media URL and downloads audio tracks.
+- Accepts media URLs and downloads audio tracks.
 - Supports configurable output format and quality.
 - Supports playlist downloads with queue/status UI.
+- Prevents obvious re-downloads by checking an indexed local library before downloading.
+- Supports duplicate cleanup workflows backed by full library indexing and byte-level audio hashing.
+- Supports Rekordbox XML import to improve duplicate matching for DJ workflows.
+- Uses staged duplicate-review sessions so changes can be reviewed, adjusted, and confirmed before final cleanup.
+- Includes a short post-action undo window for smart cleanup actions.
 - Optionally embeds metadata and thumbnails (depending on audio format).
 - Supports automatic update checks for bundled download binaries (`yt-dlp`, `ffmpeg`, `ffprobe`).
 
@@ -23,6 +28,13 @@
   - `ffmpeg` / `ffprobe`
 - The app orchestrates these tools through `Process` execution in Swift.
 - For playlist URLs, the app can prefetch entries and process multiple items.
+
+### Library indexing and duplicate resolution
+
+- Users can define library paths that are indexed for duplicate-aware download decisions.
+- The index supports deeper duplicate cleanup by hashing raw audio bytes for high-confidence matching.
+- Rekordbox XML exports can be imported to assist duplicate resolution in existing DJ libraries.
+- Duplicate actions are staged for manual review before confirmation, with an undo grace period after smart cleanup.
 
 ### Binary updates (tool updates)
 
