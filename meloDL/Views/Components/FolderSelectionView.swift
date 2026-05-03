@@ -16,13 +16,15 @@ struct FolderSelectionView: View {
                 .padding(.vertical, 8)
                 .background(Color(.controlBackgroundColor))
                 .clipShape(.rect(cornerRadius: 6))
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
 
             Button("Choose Folder") {
                 fileService.selectFolder()
             }
             .disabled(isDisabled)
             .buttonStyle(.bordered)
+            .fixedSize()
+            .layoutPriority(1)
         }
         .fileImporter(
             isPresented: $fileService.showingFolderPicker,

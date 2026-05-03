@@ -38,6 +38,9 @@ final class AppSettings: ObservableObject {
     @Published var downloadFolderPath: String {
         didSet { defaults.set(downloadFolderPath, forKey: Keys.downloadFolderPath) }
     }
+    @Published var onboardingCompleted: Bool {
+        didSet { defaults.set(onboardingCompleted, forKey: Keys.onboardingCompleted) }
+    }
 
     private let defaults: UserDefaults
 
@@ -119,6 +122,12 @@ final class AppSettings: ObservableObject {
         } else {
             duplicateIndexRoots = storedRoots
         }
+
+        if defaults.object(forKey: Keys.onboardingCompleted) != nil {
+            onboardingCompleted = defaults.bool(forKey: Keys.onboardingCompleted)
+        } else {
+            onboardingCompleted = false
+        }
     }
 
     var audioSettings: AudioSettings {
@@ -154,5 +163,6 @@ final class AppSettings: ObservableObject {
         static let openAtLogin = "settings.openAtLogin"
         static let duplicateDetectionEnabled = "settings.duplicateDetectionEnabled"
         static let duplicateIndexRoots = "settings.duplicateIndexRoots"
+        static let onboardingCompleted = "settings.onboardingCompleted"
     }
 }

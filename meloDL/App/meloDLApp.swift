@@ -8,6 +8,12 @@ private enum LaunchArguments {
     static let windowMode = "--window-mode"
 }
 
+private enum SettingsKeys {
+    static let menubarOnlyMode = "settings.menubarOnlyMode"
+    static let openAtLogin = "settings.openAtLogin"
+    static let onboardingCompleted = "settings.onboardingCompleted"
+}
+
 @main
 struct meloDLApp: App {
     @StateObject private var appSettings = AppSettings()
@@ -23,21 +29,22 @@ struct meloDLApp: App {
     init() {
         let defaults = UserDefaults.standard
         if CommandLine.arguments.contains(LaunchArguments.menubarOnly) {
-            defaults.set(true, forKey: "settings.menubarOnlyMode")
+            defaults.set(true, forKey: SettingsKeys.menubarOnlyMode)
         } else if CommandLine.arguments.contains(LaunchArguments.windowMode) {
-            defaults.set(false, forKey: "settings.menubarOnlyMode")
+            defaults.set(false, forKey: SettingsKeys.menubarOnlyMode)
         }
 
-        let isMenubarOnly = defaults.bool(forKey: "settings.menubarOnlyMode")
-        self.launchMenubarOnlyMode = isMenubarOnly
+        let isMenubarOnly = defaults.bool(forKey: SettingsKeys.menubarOnlyMode)
+        let onboardingCompleted = defaults.bool(forKey: SettingsKeys.onboardingCompleted)
+        self.launchMenubarOnlyMode = isMenubarOnly && onboardingCompleted
         UNUserNotificationCenter.current().delegate = notificationDelegate
         DownloadNotificationService.shared.configureNotificationCategories()
-        AppModeController.applyMenubarOnlyMode(isMenubarOnly)
-        if isMenubarOnly {
-            let openAtLogin = defaults.bool(forKey: "settings.openAtLogin")
+        AppModeController.applyMenubarOnlyMode(launchMenubarOnlyMode)
+        if launchMenubarOnlyMode {
+            let openAtLogin = defaults.bool(forKey: SettingsKeys.openAtLogin)
             LoginItemService.setEnabled(openAtLogin)
         } else {
-            defaults.set(false, forKey: "settings.openAtLogin")
+            defaults.set(false, forKey: SettingsKeys.openAtLogin)
             LoginItemService.setEnabled(false)
         }
     }
@@ -49,7 +56,7 @@ struct meloDLApp: App {
 
     private var mainWindowScene: some Scene {
         WindowGroup {
-            if launchMenubarOnlyMode {
+            if launchMenubarOnlyMode && appSettings.onboardingCompleted {
                 Color.clear
                     .frame(width: 0, height: 0)
                     .onAppear {
@@ -61,10 +68,18 @@ struct meloDLApp: App {
                         }
                     }
             } else {
-                ContentView(
-                    appSettings: appSettings,
-                    onCheckAppUpdates: checkForAppUpdates
-                )
+                Group {
+                    if appSettings.onboardingCompleted {
+                        ContentView(
+                            appSettings: appSettings,
+                            onCheckAppUpdates: checkForAppUpdates
+                        )
+                    } else {
+                        OnboardingView(appSettings: appSettings) {
+                            focusMainWindowIfNeeded()
+                        }
+                    }
+                }
                 .onAppear {
                     menuBarController = nil
                     focusMainWindowIfNeeded()

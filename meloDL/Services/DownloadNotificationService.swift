@@ -66,6 +66,15 @@ final class DownloadNotificationService {
         NSWorkspace.shared.open(folderURL)
     }
 
+    func requestAuthorizationIfNeeded() async -> Bool {
+        await ensureNotificationAuthorization()
+    }
+
+    func currentAuthorizationStatus() async -> UNAuthorizationStatus {
+        let settings = await notificationSettings()
+        return settings.authorizationStatus
+    }
+
     private func ensureNotificationAuthorization() async -> Bool {
         let settings = await notificationSettings()
         switch settings.authorizationStatus {
