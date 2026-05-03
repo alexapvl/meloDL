@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import SwiftUI
+import UniformTypeIdentifiers
 
 @MainActor
 final class IndexingSettingsViewModel: ObservableObject {
@@ -28,6 +29,9 @@ final class IndexingSettingsViewModel: ObservableObject {
     @Published private(set) var manualAppliedFilesCount = 0
     @Published private(set) var manualFailedDeleteCount = 0
     @Published private(set) var manualReclaimedBytes: Int64 = 0
+    @Published private(set) var rekordboxImportedTrackCount = 0
+    @Published private(set) var rekordboxImportError: String?
+    @Published private(set) var rekordboxSourceFilename: String?
     @Published var showExactDuplicateFinder = false
     @Published var showClearDataConfirmation = false
     @Published var pendingConflict: RootConflictPrompt?
@@ -36,18 +40,22 @@ final class IndexingSettingsViewModel: ObservableObject {
     private let store: TrackIndexStore
     private let indexer: TrackIndexer
     private let duplicateDetectionService: DuplicateDetectionService
+    private let rekordboxImportService: RekordboxXMLImportService
+    private var rekordboxCanonicalPaths: Set<String> = []
     private var pollingTask: Task<Void, Never>?
 
     init(
         appSettings: AppSettings,
         store: TrackIndexStore = .shared,
         indexer: TrackIndexer = .shared,
-        duplicateDetectionService: DuplicateDetectionService = .shared
+        duplicateDetectionService: DuplicateDetectionService = .shared,
+        rekordboxImportService: RekordboxXMLImportService = .shared
     ) {
         self.appSettings = appSettings
         self.store = store
         self.indexer = indexer
         self.duplicateDetectionService = duplicateDetectionService
+        self.rekordboxImportService = rekordboxImportService
     }
 
     func onAppear() {
@@ -116,7 +124,50 @@ final class IndexingSettingsViewModel: ObservableObject {
     func openExactDuplicateFinder() {
         showExactDuplicateFinder = true
         isManualReviewMode = false
+        resetManualReviewStats()
+        manualQueue = []
+        manualCurrentIndex = 0
         refreshExactDuplicateGroups()
+    }
+
+    func importRekordboxXMLUsingPanel() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.xml]
+        panel.prompt = "Import XML"
+        panel.message = "Choose the Rekordbox collection XML exported from File -> Export collection in xml format."
+
+        guard panel.runModal() == .OK, let fileURL = panel.url else { return }
+
+        rekordboxImportError = nil
+        Task {
+            do {
+                let snapshot = try await rekordboxImportService.importSnapshot(from: fileURL)
+                rekordboxCanonicalPaths = snapshot.canonicalPaths
+                rekordboxImportedTrackCount = snapshot.trackCount
+                rekordboxSourceFilename = snapshot.sourceURL.lastPathComponent
+                if isManualReviewMode {
+                    refreshManualQueueFromCurrentGroups()
+                }
+            } catch {
+                rekordboxCanonicalPaths = []
+                rekordboxImportedTrackCount = 0
+                rekordboxSourceFilename = nil
+                rekordboxImportError = error.localizedDescription
+            }
+        }
+    }
+
+    func clearRekordboxImport() {
+        rekordboxCanonicalPaths = []
+        rekordboxImportedTrackCount = 0
+        rekordboxSourceFilename = nil
+        rekordboxImportError = nil
+        if isManualReviewMode {
+            refreshManualQueueFromCurrentGroups()
+        }
     }
 
     func reindexAfterDuplicateFinderClosed() {
@@ -160,9 +211,10 @@ final class IndexingSettingsViewModel: ObservableObject {
         }
     }
 
-    func runSmartCleanup() {
+    func runSmartCleanup(scope: SmartCleanupScope) {
         guard !isRunningSmartCleanup else { return }
-        let plan = buildSmartCleanupPlan(from: exactDuplicateGroups, keepRule: smartCleanupKeepRule)
+        let groupsForScope = groupsForCleanupScope(scope, from: exactDuplicateGroups)
+        let plan = buildSmartCleanupPlan(from: groupsForScope, keepRule: smartCleanupKeepRule)
         guard !plan.remove.isEmpty else {
             smartCleanupSummary = SmartCleanupSummary(
                 keptCount: plan.keep.count,
@@ -232,24 +284,75 @@ final class IndexingSettingsViewModel: ObservableObject {
     func startManualReviewSession() {
         guard !exactDuplicateGroups.isEmpty else { return }
         isManualReviewMode = true
-        manualQueue = exactDuplicateGroups.map { group in
-            ManualDuplicateGroupState(
-                group: group,
-                status: .pending,
-                keeperPath: defaultKeeperPath(for: group, keepRule: smartCleanupKeepRule)
-            )
-        }
+        resetManualReviewStats()
+        manualQueue = []
         manualCurrentIndex = 0
+        refreshManualQueueFromCurrentGroups()
+    }
+
+    func showOverviewMode() {
+        isManualReviewMode = false
+    }
+
+    func returnToManualReviewMode() {
+        if manualQueue.isEmpty {
+            refreshManualQueueFromCurrentGroups()
+        }
+        isManualReviewMode = true
+    }
+
+    func isRekordboxMatched(filePath: String) -> Bool {
+        isInRekordboxLibrary(path: filePath)
+    }
+
+    func rekordboxMatchCount(in group: ExactDuplicateGroup) -> Int {
+        group.files.reduce(0) { partial, file in
+            partial + (isInRekordboxLibrary(path: file.path) ? 1 : 0)
+        }
+    }
+
+    func hasRekordboxMatch(in group: ExactDuplicateGroup) -> Bool {
+        group.files.contains { isInRekordboxLibrary(path: $0.path) }
+    }
+
+    func canUseRekordboxOnlyCleanupScope() -> Bool {
+        exactDuplicateGroups.contains { hasRekordboxMatch(in: $0) }
+    }
+
+    private func resetManualReviewStats() {
         manualAppliedGroupsCount = 0
         manualAppliedFilesCount = 0
         manualFailedDeleteCount = 0
         manualReclaimedBytes = 0
     }
 
+    private func groupsForCleanupScope(_ scope: SmartCleanupScope, from groups: [ExactDuplicateGroup]) -> [ExactDuplicateGroup] {
+        switch scope {
+        case .allGroups:
+            return groups
+        case .rekordboxOnly:
+            return groups.filter { hasRekordboxMatch(in: $0) }
+        }
+    }
+
+    func smartCleanupGroupCount(for scope: SmartCleanupScope) -> Int {
+        groupsForCleanupScope(scope, from: exactDuplicateGroups).count
+    }
+
+    func smartCleanupCandidateCount(for scope: SmartCleanupScope) -> Int {
+        let groups = groupsForCleanupScope(scope, from: exactDuplicateGroups)
+        return buildSmartCleanupPlan(from: groups, keepRule: smartCleanupKeepRule).remove.count
+    }
+
+    func smartCleanupEstimatedReclaimBytes(for scope: SmartCleanupScope) -> Int64 {
+        let groups = groupsForCleanupScope(scope, from: exactDuplicateGroups)
+        return buildSmartCleanupPlan(from: groups, keepRule: smartCleanupKeepRule).remove.reduce(0) { partial, file in
+            partial + (file.filesize ?? 0)
+        }
+    }
+
     func exitManualReviewMode() {
-        isManualReviewMode = false
-        manualQueue = []
-        manualCurrentIndex = 0
+        showOverviewMode()
     }
 
     func selectManualKeeper(path: String) {
@@ -359,13 +462,36 @@ final class IndexingSettingsViewModel: ObservableObject {
     }
 
     var smartCleanupCandidateCount: Int {
-        buildSmartCleanupPlan(from: exactDuplicateGroups, keepRule: smartCleanupKeepRule).remove.count
+        smartCleanupCandidateCount(for: .allGroups)
     }
 
     var smartCleanupEstimatedReclaimBytes: Int64 {
-        buildSmartCleanupPlan(from: exactDuplicateGroups, keepRule: smartCleanupKeepRule).remove.reduce(0) { partial, file in
-            partial + (file.filesize ?? 0)
+        smartCleanupEstimatedReclaimBytes(for: .allGroups)
+    }
+
+    var isRekordboxAssistActive: Bool {
+        !rekordboxCanonicalPaths.isEmpty
+    }
+
+    var rekordboxStatusText: String? {
+        if let rekordboxImportError {
+            return "Rekordbox import failed: \(rekordboxImportError)"
         }
+        guard isRekordboxAssistActive else { return nil }
+        let source = rekordboxSourceFilename ?? "XML"
+        let trackCountText = NumberFormatter.localizedString(
+            from: NSNumber(value: rekordboxImportedTrackCount),
+            number: .decimal
+        )
+        let autoResolvableGroupsText = NumberFormatter.localizedString(
+            from: NSNumber(value: autoResolvableGroupCount),
+            number: .decimal
+        )
+        return "Rekordbox: \(trackCountText) tracks loaded, \(autoResolvableGroupsText) groups can be auto-resolved with Smart Cleanup (\(source))."
+    }
+
+    private var autoResolvableGroupCount: Int {
+        exactDuplicateGroups.filter { hasRekordboxMatch(in: $0) }.count
     }
 
     var manualCurrentGroupState: ManualDuplicateGroupState? {
@@ -485,25 +611,7 @@ final class IndexingSettingsViewModel: ObservableObject {
         var remove: [ExactDuplicateFileEntry] = []
 
         for group in groups {
-            let sorted = group.files.sorted { lhs, rhs in
-                switch keepRule {
-                case .newestModified:
-                    if lhs.mtime != rhs.mtime {
-                        return lhs.mtime > rhs.mtime
-                    }
-                    return lhs.path.localizedStandardCompare(rhs.path) == .orderedAscending
-                case .oldestModified:
-                    if lhs.mtime != rhs.mtime {
-                        return lhs.mtime < rhs.mtime
-                    }
-                    return lhs.path.localizedStandardCompare(rhs.path) == .orderedAscending
-                case .shortestPath:
-                    if lhs.path.count != rhs.path.count {
-                        return lhs.path.count < rhs.path.count
-                    }
-                    return lhs.path.localizedStandardCompare(rhs.path) == .orderedAscending
-                }
-            }
+            let sorted = sortDuplicateFiles(group.files, keepRule: keepRule)
             guard let keeper = sorted.first else { continue }
             keep.append(keeper)
             remove.append(contentsOf: sorted.dropFirst())
@@ -512,26 +620,39 @@ final class IndexingSettingsViewModel: ObservableObject {
     }
 
     private func defaultKeeperPath(for group: ExactDuplicateGroup, keepRule: SmartCleanupKeepRule) -> String? {
-        let sorted = group.files.sorted { lhs, rhs in
+        let sorted = sortDuplicateFiles(group.files, keepRule: keepRule)
+        return sorted.first?.path
+    }
+
+    private func sortDuplicateFiles(_ files: [ExactDuplicateFileEntry], keepRule: SmartCleanupKeepRule) -> [ExactDuplicateFileEntry] {
+        files.sorted { lhs, rhs in
+            let lhsInRekordbox = isInRekordboxLibrary(path: lhs.path)
+            let rhsInRekordbox = isInRekordboxLibrary(path: rhs.path)
+            if lhsInRekordbox != rhsInRekordbox {
+                return lhsInRekordbox
+            }
+
             switch keepRule {
             case .newestModified:
                 if lhs.mtime != rhs.mtime {
                     return lhs.mtime > rhs.mtime
                 }
-                return lhs.path.localizedStandardCompare(rhs.path) == .orderedAscending
             case .oldestModified:
                 if lhs.mtime != rhs.mtime {
                     return lhs.mtime < rhs.mtime
                 }
-                return lhs.path.localizedStandardCompare(rhs.path) == .orderedAscending
             case .shortestPath:
                 if lhs.path.count != rhs.path.count {
                     return lhs.path.count < rhs.path.count
                 }
-                return lhs.path.localizedStandardCompare(rhs.path) == .orderedAscending
             }
+            return lhs.path.localizedStandardCompare(rhs.path) == .orderedAscending
         }
-        return sorted.first?.path
+    }
+
+    private func isInRekordboxLibrary(path: String) -> Bool {
+        guard !rekordboxCanonicalPaths.isEmpty else { return false }
+        return rekordboxCanonicalPaths.contains(TrackIndexStore.canonicalize(path: path))
     }
 
     private func normalizeManualCurrentIndex() {
@@ -545,15 +666,24 @@ final class IndexingSettingsViewModel: ObservableObject {
     private func refreshManualQueueFromCurrentGroups() {
         let existingByHash = Dictionary(uniqueKeysWithValues: manualQueue.map { ($0.group.contentHash, $0) })
         manualQueue = exactDuplicateGroups.map { group in
+            let fallbackKeeper = defaultKeeperPath(for: group, keepRule: smartCleanupKeepRule)
             if let existing = existingByHash[group.contentHash] {
-                let fallbackKeeper = defaultKeeperPath(for: group, keepRule: smartCleanupKeepRule)
                 let keeperStillExists = existing.keeperPath.flatMap { keeper in
                     group.files.first(where: { $0.path == keeper })?.path
+                }
+                let resolvedKeeper: String?
+                if let keeperStillExists,
+                   hasRekordboxMatch(in: group),
+                   !isInRekordboxLibrary(path: keeperStillExists) {
+                    // Force Rekordbox-first keeper when available.
+                    resolvedKeeper = fallbackKeeper
+                } else {
+                    resolvedKeeper = keeperStillExists ?? fallbackKeeper
                 }
                 return ManualDuplicateGroupState(
                     group: group,
                     status: existing.status,
-                    keeperPath: keeperStillExists ?? fallbackKeeper
+                    keeperPath: resolvedKeeper
                 )
             }
             return ManualDuplicateGroupState(
@@ -613,6 +743,22 @@ enum SmartCleanupKeepRule: String, CaseIterable, Identifiable, Sendable {
             return "Keeps the oldest modified file in each group."
         case .shortestPath:
             return "Keeps the file with the shortest path in each group."
+        }
+    }
+}
+
+enum SmartCleanupScope: String, CaseIterable, Identifiable, Sendable {
+    case allGroups
+    case rekordboxOnly
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .allGroups:
+            return "All groups"
+        case .rekordboxOnly:
+            return "Rekordbox matches only"
         }
     }
 }

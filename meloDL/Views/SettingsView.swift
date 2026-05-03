@@ -296,7 +296,7 @@ struct IndexingSettingsView: View {
                                 isOn: $appSettings.duplicateDetectionEnabled
                             )
 
-                            Button("Find Duplicate Files in Index") {
+                            Button("Scan Library for Duplicates") {
                                 viewModel.openExactDuplicateFinder()
                             }
                             .disabled(viewModel.roots.isEmpty || viewModel.isIndexing)
@@ -575,20 +575,33 @@ private struct ExactDuplicateFinderSheet: View {
                     .foregroundStyle(smartCleanupSummary.failedCount > 0 ? .orange : .secondary)
             }
 
+            if let rekordboxStatusText = viewModel.rekordboxStatusText {
+                Text(rekordboxStatusText)
+                    .font(.caption)
+                    .foregroundStyle(viewModel.isRekordboxAssistActive ? Color.primary : Color.red)
+            }
+
+            if !viewModel.isManualReviewMode && !viewModel.isRekordboxAssistActive {
+                Text("Rekordbox users: In Rekordbox, go to File -> Export collection in xml format, then import that XML here.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
             if !viewModel.isScanningExactDuplicates && !viewModel.isRunningSmartCleanup {
-                if viewModel.isManualReviewMode {
-                    manualReviewContent
-                } else if viewModel.exactDuplicateGroups.isEmpty {
+                if viewModel.exactDuplicateGroups.isEmpty {
                     ContentUnavailableView(
                         "No Exact Duplicates",
                         systemImage: "checkmark.circle",
                         description: Text("No files in your index share identical content.")
                     )
+                } else if viewModel.isManualReviewMode {
+                    manualReviewContent
                 } else {
                     List {
                         ForEach(viewModel.exactDuplicateGroups) { group in
                             Section {
                                 ForEach(group.files) { file in
+                                    let isRekordboxMatch = viewModel.isRekordboxMatched(filePath: file.path)
                                     HStack(alignment: .top, spacing: 10) {
                                         VStack(alignment: .leading, spacing: 4) {
                                             Text(file.filename)
@@ -602,14 +615,20 @@ private struct ExactDuplicateFinderSheet: View {
                                                 .foregroundStyle(.secondary)
                                         }
                                         Spacer(minLength: 0)
-                                        Button("Preview") {
-                                            TrackPreviewService.shared.previewTrack(
-                                                atPath: file.path,
-                                                title: file.filename
-                                            )
+                                        VStack(alignment: .trailing, spacing: 6) {
+                                            Button("Preview") {
+                                                TrackPreviewService.shared.previewTrack(
+                                                    atPath: file.path,
+                                                    title: file.filename
+                                                )
+                                            }
+                                            .buttonStyle(.bordered)
+                                            .controlSize(.small)
+
+                                            if isRekordboxMatch {
+                                                rekordboxMatchTag
+                                            }
                                         }
-                                        .buttonStyle(.bordered)
-                                        .controlSize(.small)
                                     }
                                     .contextMenu {
                                         Button("Copy Path") {
@@ -641,20 +660,18 @@ private struct ExactDuplicateFinderSheet: View {
                 viewModel.refreshExactDuplicateGroups()
             }
         }
-        .alert("Run Smart Cleanup?", isPresented: $viewModel.showSmartCleanupConfirmation) {
-            Button("Cancel", role: .cancel) {}
-            Button("Move Duplicates to Trash", role: .destructive) {
-                viewModel.runSmartCleanup()
+        .confirmationDialog("Smart Cleanup", isPresented: $viewModel.showSmartCleanupConfirmation, titleVisibility: .visible) {
+            Button("Clean All Duplicates", role: .destructive) {
+                viewModel.runSmartCleanup(scope: .allGroups)
             }
+            if viewModel.canUseRekordboxOnlyCleanupScope() {
+                Button("Clean Rekordbox Matches Only", role: .destructive) {
+                    viewModel.runSmartCleanup(scope: .rekordboxOnly)
+                }
+            }
+            Button("Cancel", role: .cancel) {}
         } message: {
-            Text(
-                """
-                \(viewModel.smartCleanupKeepRule.descriptionText)
-                All other files in each duplicate group will be moved to Trash.
-                Files to remove: \(viewModel.smartCleanupCandidateCount)
-                Estimated space reclaimed: \(ByteCountFormatter.string(fromByteCount: viewModel.smartCleanupEstimatedReclaimBytes, countStyle: .file))
-                """
-            )
+            Text(smartCleanupDialogMessage)
         }
     }
 
@@ -683,6 +700,14 @@ private struct ExactDuplicateFinderSheet: View {
                             .foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 0)
+                    let rekordboxMatches = viewModel.rekordboxMatchCount(in: state.group)
+                    if rekordboxMatches > 0 {
+                        Text("Rekordbox matches: \(rekordboxMatches)")
+                            .font(.caption2.weight(.semibold))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Color.accentColor.opacity(0.16), in: Capsule())
+                    }
                 }
 
                 Text("Select one keeper. Other files will be moved to Trash when you confirm.")
@@ -693,6 +718,7 @@ private struct ExactDuplicateFinderSheet: View {
                     Section {
                         ForEach(state.group.files) { file in
                             let isSelectedKeeper = state.keeperPath == file.path
+                            let isRekordboxMatch = viewModel.isRekordboxMatched(filePath: file.path)
                             HStack(alignment: .top, spacing: 10) {
                                 Button {
                                     viewModel.selectManualKeeper(path: file.path)
@@ -715,14 +741,20 @@ private struct ExactDuplicateFinderSheet: View {
                                         .foregroundStyle(.secondary)
                                 }
                                 Spacer(minLength: 0)
-                                Button("Preview") {
-                                    TrackPreviewService.shared.previewTrack(
-                                        atPath: file.path,
-                                        title: file.filename
-                                    )
+                                VStack(alignment: .trailing, spacing: 6) {
+                                    Button("Preview") {
+                                        TrackPreviewService.shared.previewTrack(
+                                            atPath: file.path,
+                                            title: file.filename
+                                        )
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
+
+                                    if isRekordboxMatch {
+                                        rekordboxMatchTag
+                                    }
                                 }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
                             }
                             .padding(8)
                             .background(
@@ -778,10 +810,14 @@ private struct ExactDuplicateFinderSheet: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(viewModel.manualCurrentGroupState == nil || viewModel.isRunningSmartCleanup)
             } else {
-                Button("Refresh Scan") {
-                    viewModel.refreshExactDuplicateGroups()
+                Button("Manual Review") {
+                    viewModel.returnToManualReviewMode()
                 }
-                .disabled(viewModel.isScanningExactDuplicates || viewModel.isRunningSmartCleanup)
+                .disabled(
+                    viewModel.exactDuplicateGroups.isEmpty
+                    || viewModel.isScanningExactDuplicates
+                    || viewModel.isRunningSmartCleanup
+                )
 
                 Picker("Keep rule", selection: $viewModel.smartCleanupKeepRule) {
                     ForEach(SmartCleanupKeepRule.allCases) { rule in
@@ -792,15 +828,6 @@ private struct ExactDuplicateFinderSheet: View {
                 .pickerStyle(.menu)
                 .disabled(viewModel.isRunningSmartCleanup)
 
-                Button("Manual Review") {
-                    viewModel.startManualReviewSession()
-                }
-                .disabled(
-                    viewModel.exactDuplicateGroups.isEmpty
-                    || viewModel.isScanningExactDuplicates
-                    || viewModel.isRunningSmartCleanup
-                )
-
                 Button("Smart Cleanup...") {
                     viewModel.showSmartCleanupConfirmation = true
                 }
@@ -810,13 +837,35 @@ private struct ExactDuplicateFinderSheet: View {
                     || viewModel.isRunningSmartCleanup
                     || viewModel.isIndexing
                 )
+
+                Menu("Tools") {
+                    Button("Refresh Scan") {
+                        viewModel.refreshExactDuplicateGroups()
+                    }
+                    .disabled(viewModel.isScanningExactDuplicates || viewModel.isRunningSmartCleanup)
+
+                    Divider()
+
+                    Button("Import Rekordbox XML...") {
+                        viewModel.importRekordboxXMLUsingPanel()
+                    }
+                    .disabled(viewModel.isScanningExactDuplicates || viewModel.isRunningSmartCleanup)
+
+                    if viewModel.isRekordboxAssistActive {
+                        Button("Clear Rekordbox Import") {
+                            viewModel.clearRekordboxImport()
+                        }
+                        .disabled(viewModel.isRunningSmartCleanup)
+                    }
+                }
+                .disabled(viewModel.isRunningSmartCleanup)
             }
 
             Spacer(minLength: 0)
 
             if viewModel.isManualReviewMode {
                 Button("Back") {
-                    viewModel.exitManualReviewMode()
+                    viewModel.showOverviewMode()
                 }
                 .disabled(viewModel.isRunningSmartCleanup)
             } else {
@@ -840,6 +889,43 @@ private struct ExactDuplicateFinderSheet: View {
             return "Cleanup removed \(summary.removedCount) files, failed \(summary.failedCount), kept \(summary.keptCount), reclaimed \(reclaimed)."
         }
         return "Cleanup removed \(summary.removedCount) files, kept \(summary.keptCount), reclaimed \(reclaimed)."
+    }
+
+    private var rekordboxMatchTag: some View {
+        Text("Found in Rekordbox")
+            .font(.caption2.weight(.semibold))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(Color.accentColor.opacity(0.16), in: Capsule())
+    }
+
+    private var smartCleanupDialogMessage: String {
+        let allGroups = viewModel.smartCleanupGroupCount(for: .allGroups)
+        let allFiles = viewModel.smartCleanupCandidateCount(for: .allGroups)
+        let allReclaim = ByteCountFormatter.string(
+            fromByteCount: viewModel.smartCleanupEstimatedReclaimBytes(for: .allGroups),
+            countStyle: .file
+        )
+
+        let rekordboxGroups = viewModel.smartCleanupGroupCount(for: .rekordboxOnly)
+        let rekordboxFiles = viewModel.smartCleanupCandidateCount(for: .rekordboxOnly)
+        let rekordboxReclaim = ByteCountFormatter.string(
+            fromByteCount: viewModel.smartCleanupEstimatedReclaimBytes(for: .rekordboxOnly),
+            countStyle: .file
+        )
+
+        if viewModel.canUseRekordboxOnlyCleanupScope() {
+            return """
+            Choose how broad cleanup should be.
+            Clean All removes duplicates across your whole indexed library (\(allFiles) files, about \(allReclaim)).
+            Rekordbox Only limits cleanup to groups linked to your Rekordbox XML (\(rekordboxFiles) files, about \(rekordboxReclaim)).
+            """
+        }
+
+        return """
+        Clean All will process your full duplicate library (\(allGroups) groups, \(allFiles) files, about \(allReclaim)).
+        Import a Rekordbox XML file if you want the Rekordbox-only cleanup option.
+        """
     }
 }
 
