@@ -11,6 +11,7 @@ private enum LaunchArguments {
 @main
 struct meloDLApp: App {
     @StateObject private var appSettings = AppSettings()
+    @State private var menuBarController: MenuBarController?
     private let notificationDelegate = DownloadNotificationCenterDelegate()
     private let launchMenubarOnlyMode: Bool
     private let updaterController = SPUStandardUpdaterController(
@@ -32,11 +33,17 @@ struct meloDLApp: App {
         UNUserNotificationCenter.current().delegate = notificationDelegate
         DownloadNotificationService.shared.configureNotificationCategories()
         AppModeController.applyMenubarOnlyMode(isMenubarOnly)
+        if isMenubarOnly {
+            let openAtLogin = defaults.bool(forKey: "settings.openAtLogin")
+            LoginItemService.setEnabled(openAtLogin)
+        } else {
+            defaults.set(false, forKey: "settings.openAtLogin")
+            LoginItemService.setEnabled(false)
+        }
     }
 
     var body: some Scene {
         mainWindowScene
-        menuBarScene
         settingsScene
     }
 
@@ -46,6 +53,7 @@ struct meloDLApp: App {
                 Color.clear
                     .frame(width: 0, height: 0)
                     .onAppear {
+                        configureMenuBarControllerIfNeeded()
                         DispatchQueue.main.async {
                             for window in NSApplication.shared.windows where window.level == .normal {
                                 window.close()
@@ -58,6 +66,7 @@ struct meloDLApp: App {
                     onCheckAppUpdates: checkForAppUpdates
                 )
                 .onAppear {
+                    menuBarController = nil
                     focusMainWindowIfNeeded()
                 }
             }
@@ -71,23 +80,6 @@ struct meloDLApp: App {
                 Button("Check for Updates...", action: checkForAllUpdates)
             }
         }
-    }
-
-    private var menuBarScene: some Scene {
-        MenuBarExtra(isInserted: .constant(launchMenubarOnlyMode)) {
-            MenuBarContentView(
-                appSettings: appSettings,
-                onCheckAppUpdates: checkForAppUpdates,
-                onQuit: quitApp
-            )
-        } label: {
-            Image("MenuBarLogo")
-                .renderingMode(.template)
-                .resizable()
-                .scaledToFit()
-                .frame(width: 10, height: 10)
-        }
-        .menuBarExtraStyle(.window)
     }
 
     private var settingsScene: some Scene {
@@ -124,6 +116,24 @@ struct meloDLApp: App {
 
     private func quitApp() {
         NSApp.terminate(nil)
+    }
+
+    private func switchToDockMode() {
+        AppRelauncher.relaunch(menubarOnly: false)
+    }
+
+    private func configureMenuBarControllerIfNeeded() {
+        guard launchMenubarOnlyMode else {
+            menuBarController = nil
+            return
+        }
+        guard menuBarController == nil else { return }
+        menuBarController = MenuBarController(
+            appSettings: appSettings,
+            onCheckAllUpdates: checkForAllUpdates,
+            onSwitchToDockMode: switchToDockMode,
+            onQuit: quitApp
+        )
     }
 }
 

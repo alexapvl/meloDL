@@ -26,6 +26,9 @@ final class AppSettings: ObservableObject {
     @Published var menubarOnlyMode: Bool {
         didSet { defaults.set(menubarOnlyMode, forKey: Keys.menubarOnlyMode) }
     }
+    @Published var openAtLogin: Bool {
+        didSet { defaults.set(openAtLogin, forKey: Keys.openAtLogin) }
+    }
     @Published var duplicateDetectionEnabled: Bool {
         didSet { defaults.set(duplicateDetectionEnabled, forKey: Keys.duplicateDetectionEnabled) }
     }
@@ -89,6 +92,12 @@ final class AppSettings: ObservableObject {
             menubarOnlyMode = false
         }
 
+        if defaults.object(forKey: Keys.openAtLogin) != nil {
+            openAtLogin = defaults.bool(forKey: Keys.openAtLogin)
+        } else {
+            openAtLogin = false
+        }
+
         if defaults.object(forKey: Keys.duplicateDetectionEnabled) != nil {
             duplicateDetectionEnabled = defaults.bool(forKey: Keys.duplicateDetectionEnabled)
         } else {
@@ -142,6 +151,7 @@ final class AppSettings: ObservableObject {
         static let openFolderOnSuccess = "settings.openFolderOnSuccess"
         static let notifyOnDownloadCompletion = "settings.notifyOnDownloadCompletion"
         static let menubarOnlyMode = "settings.menubarOnlyMode"
+        static let openAtLogin = "settings.openAtLogin"
         static let duplicateDetectionEnabled = "settings.duplicateDetectionEnabled"
         static let duplicateIndexRoots = "settings.duplicateIndexRoots"
     }

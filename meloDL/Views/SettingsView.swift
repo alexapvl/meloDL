@@ -255,8 +255,25 @@ struct BehaviorSettingsView: View {
                             SettingsToggleRow(
                                 title: "Use menubar-only mode",
                                 isOn: $appSettings.menubarOnlyMode
-                            ) { _, _ in
+                            ) { _, newValue in
+                                if !newValue, appSettings.openAtLogin {
+                                    appSettings.openAtLogin = false
+                                    LoginItemService.setEnabled(false)
+                                }
                                 showRestartPrompt = true
+                            }
+                            SettingsToggleRow(
+                                title: "Open meloDL at login",
+                                isOn: $appSettings.openAtLogin
+                            ) { _, newValue in
+                                LoginItemService.setEnabled(newValue)
+                            }
+                            .disabled(!appSettings.menubarOnlyMode)
+
+                            if !appSettings.menubarOnlyMode {
+                                Text("Available only when menubar-only mode is enabled.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
                             }
                         }
                     }
