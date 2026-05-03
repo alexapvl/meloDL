@@ -21,6 +21,7 @@ final class IndexingSettingsViewModel: ObservableObject {
     @Published private(set) var isRunningSmartCleanup = false
     @Published var showSmartCleanupConfirmation = false
     @Published private(set) var smartCleanupSummary: SmartCleanupSummary?
+    @Published private(set) var smartCleanupUndoToast: SmartCleanupUndoToast?
     @Published var smartCleanupKeepRule: SmartCleanupKeepRule = .oldestModified
     @Published var isManualReviewMode = false
     @Published private(set) var manualQueue: [ManualDuplicateGroupState] = []
@@ -33,6 +34,8 @@ final class IndexingSettingsViewModel: ObservableObject {
     @Published private(set) var rekordboxImportError: String?
     @Published private(set) var rekordboxSourceFilename: String?
     @Published var showExactDuplicateFinder = false
+    @Published var showManualSessionConfirmDialog = false
+    @Published var showManualSessionCancelDialog = false
     @Published var showClearDataConfirmation = false
     @Published var pendingConflict: RootConflictPrompt?
 
@@ -43,6 +46,8 @@ final class IndexingSettingsViewModel: ObservableObject {
     private let rekordboxImportService: RekordboxXMLImportService
     private var rekordboxCanonicalPaths: Set<String> = []
     private var pollingTask: Task<Void, Never>?
+    private var smartCleanupUndoEntries: [SmartCleanupUndoEntry] = []
+    private var smartCleanupUndoDismissTask: Task<Void, Never>?
 
     init(
         appSettings: AppSettings,
@@ -69,6 +74,8 @@ final class IndexingSettingsViewModel: ObservableObject {
     func onDisappear() {
         pollingTask?.cancel()
         pollingTask = nil
+        smartCleanupUndoDismissTask?.cancel()
+        smartCleanupUndoDismissTask = nil
     }
 
     func addRootUsingPanel() {
@@ -123,6 +130,9 @@ final class IndexingSettingsViewModel: ObservableObject {
 
     func openExactDuplicateFinder() {
         showExactDuplicateFinder = true
+        showManualSessionConfirmDialog = false
+        showManualSessionCancelDialog = false
+        clearSmartCleanupUndoWindow()
         isManualReviewMode = false
         resetManualReviewStats()
         manualQueue = []
@@ -213,6 +223,7 @@ final class IndexingSettingsViewModel: ObservableObject {
 
     func runSmartCleanup(scope: SmartCleanupScope) {
         guard !isRunningSmartCleanup else { return }
+        clearSmartCleanupUndoWindow()
         let groupsForScope = groupsForCleanupScope(scope, from: exactDuplicateGroups)
         let plan = buildSmartCleanupPlan(from: groupsForScope, keepRule: smartCleanupKeepRule)
         guard !plan.remove.isEmpty else {
@@ -232,30 +243,7 @@ final class IndexingSettingsViewModel: ObservableObject {
 
         Task {
             defer { isRunningSmartCleanup = false }
-
-            let removalResult = await Task.detached(priority: .userInitiated) {
-                let fileManager = FileManager.default
-                var removedCount = 0
-                var failedCount = 0
-                var reclaimedBytes: Int64 = 0
-
-                for file in plan.remove {
-                    let url = URL(fileURLWithPath: file.path)
-                    do {
-                        if fileManager.fileExists(atPath: url.path) {
-                            try fileManager.trashItem(at: url, resultingItemURL: nil)
-                            removedCount += 1
-                            if let filesize = file.filesize {
-                                reclaimedBytes += filesize
-                            }
-                        }
-                    } catch {
-                        failedCount += 1
-                    }
-                }
-
-                return (removedCount, failedCount, reclaimedBytes)
-            }.value
+            let removalResult = await Self.trashDuplicateFilesForSmartCleanup(plan.remove)
 
             await indexer.reindexNow(roots: rootsSnapshot)
             await refreshSnapshot()
@@ -267,22 +255,65 @@ final class IndexingSettingsViewModel: ObservableObject {
 
             smartCleanupSummary = SmartCleanupSummary(
                 keptCount: plan.keep.count,
-                removedCount: removalResult.0,
-                failedCount: removalResult.1,
-                reclaimedBytes: removalResult.2
+                removedCount: removalResult.removedCount,
+                failedCount: removalResult.failedCount,
+                reclaimedBytes: removalResult.reclaimedBytes
             )
 
-            if removalResult.1 > 0 {
+            if removalResult.failedCount > 0 {
                 feedbackMessage = "Cleanup finished with partial failures."
-                exactDuplicateScanError = "Failed to move \(removalResult.1) file(s) to Trash."
+                exactDuplicateScanError = "Failed to move \(removalResult.failedCount) file(s) to Trash."
             } else {
-                feedbackMessage = "Smart cleanup removed \(removalResult.0) duplicate file(s)."
+                feedbackMessage = "Smart cleanup removed \(removalResult.removedCount) duplicate file(s)."
             }
+
+            if removalResult.removedCount > 0, !removalResult.undoEntries.isEmpty {
+                armSmartCleanupUndoWindow(removedCount: removalResult.removedCount, undoEntries: removalResult.undoEntries)
+            }
+        }
+    }
+
+    func undoLastSmartCleanup() {
+        guard !isRunningSmartCleanup else { return }
+        guard smartCleanupUndoToast != nil else { return }
+        let undoEntries = smartCleanupUndoEntries
+        guard !undoEntries.isEmpty else {
+            clearSmartCleanupUndoWindow()
+            return
+        }
+
+        smartCleanupUndoDismissTask?.cancel()
+        smartCleanupUndoDismissTask = nil
+        smartCleanupUndoToast = nil
+        isRunningSmartCleanup = true
+        exactDuplicateScanError = nil
+        let rootsSnapshot = roots
+
+        Task {
+            defer { isRunningSmartCleanup = false }
+            let restoreResult = await Self.restoreSmartCleanupFiles(undoEntries)
+
+            await indexer.reindexNow(roots: rootsSnapshot)
+            await refreshSnapshot()
+            do {
+                exactDuplicateGroups = try await duplicateDetectionService.findExactDuplicateFileGroups()
+            } catch {
+                exactDuplicateScanError = "Undo succeeded, but duplicate list refresh failed: \(error.localizedDescription)"
+            }
+
+            clearSmartCleanupUndoWindow()
+            smartCleanupSummary = nil
+            if restoreResult.failedCount > 0 {
+                exactDuplicateScanError = "Undo restored \(restoreResult.restoredCount) file(s), but \(restoreResult.failedCount) could not be restored."
+            }
+            feedbackMessage = "Undid smart cleanup for \(restoreResult.restoredCount) file(s)."
         }
     }
 
     func startManualReviewSession() {
         guard !exactDuplicateGroups.isEmpty else { return }
+        showManualSessionConfirmDialog = false
+        showManualSessionCancelDialog = false
         isManualReviewMode = true
         resetManualReviewStats()
         manualQueue = []
@@ -291,6 +322,8 @@ final class IndexingSettingsViewModel: ObservableObject {
     }
 
     func showOverviewMode() {
+        showManualSessionConfirmDialog = false
+        showManualSessionCancelDialog = false
         isManualReviewMode = false
     }
 
@@ -355,6 +388,66 @@ final class IndexingSettingsViewModel: ObservableObject {
         showOverviewMode()
     }
 
+    func confirmManualReviewSession() {
+        guard !isRunningSmartCleanup else { return }
+        let filesToDelete = stagedManualFilesToDelete()
+        let groupsToApply = manualQueue.filter { $0.status == .stagedApply }.count
+
+        isRunningSmartCleanup = true
+        exactDuplicateScanError = nil
+        let rootsSnapshot = roots
+
+        Task {
+            defer { isRunningSmartCleanup = false }
+            defer {
+                showManualSessionConfirmDialog = false
+                showManualSessionCancelDialog = false
+                showOverviewMode()
+            }
+
+            guard !filesToDelete.isEmpty else {
+                feedbackMessage = "No staged actions to apply."
+                resetManualReviewSessionDecisions()
+                return
+            }
+
+            let result = await Self.trashDuplicateFiles(filesToDelete)
+
+            manualAppliedGroupsCount += groupsToApply
+            manualAppliedFilesCount += result.removedCount
+            manualFailedDeleteCount += result.failedCount
+            manualReclaimedBytes += result.reclaimedBytes
+
+            await indexer.reindexNow(roots: rootsSnapshot)
+            await refreshSnapshot()
+
+            do {
+                exactDuplicateGroups = try await duplicateDetectionService.findExactDuplicateFileGroups()
+                refreshManualQueueFromCurrentGroups()
+                resetManualReviewSessionDecisions()
+            } catch {
+                exactDuplicateScanError = "Session applied, but duplicate list refresh failed: \(error.localizedDescription)"
+            }
+
+            if result.failedCount > 0 {
+                feedbackMessage = "Session applied with partial failures."
+                exactDuplicateScanError = "Failed to move \(result.failedCount) file(s) to Trash."
+            } else {
+                feedbackMessage = "Session applied: moved \(result.removedCount) file(s) to Trash."
+            }
+        }
+    }
+
+    func cancelManualReviewSession() {
+        guard !isRunningSmartCleanup else { return }
+        resetManualReviewSessionDecisions()
+        resetManualReviewStats()
+        manualCurrentIndex = 0
+        showManualSessionCancelDialog = false
+        showOverviewMode()
+        feedbackMessage = "Manual review session canceled. No staged changes were applied."
+    }
+
     func selectManualKeeper(path: String) {
         guard manualQueue.indices.contains(manualCurrentIndex) else { return }
         manualQueue[manualCurrentIndex].keeperPath = path
@@ -367,65 +460,26 @@ final class IndexingSettingsViewModel: ObservableObject {
 
     func skipManualGroup() {
         guard !manualQueue.isEmpty else { return }
-        manualCurrentIndex = min(max(0, manualQueue.count - 1), manualCurrentIndex + 1)
+        guard manualQueue.indices.contains(manualCurrentIndex) else { return }
+        manualQueue[manualCurrentIndex].status = .skipped
+        moveToNextManualGroup()
     }
 
     func applyCurrentManualGroup() {
         guard manualQueue.indices.contains(manualCurrentIndex) else { return }
-        guard !isRunningSmartCleanup else { return }
-
         let groupState = manualQueue[manualCurrentIndex]
         guard let keeperPath = groupState.keeperPath else {
             return
         }
         let filesToDelete = groupState.group.files.filter { $0.path != keeperPath }
-        guard !filesToDelete.isEmpty else {
-            manualQueue.remove(at: manualCurrentIndex)
-            manualAppliedGroupsCount += 1
-            normalizeManualCurrentIndex()
-            return
-        }
+        guard !filesToDelete.isEmpty else { return }
+        manualQueue[manualCurrentIndex].status = .stagedApply
+        moveToNextManualGroup()
+    }
 
-        isRunningSmartCleanup = true
-        exactDuplicateScanError = nil
-
-        Task {
-            defer { isRunningSmartCleanup = false }
-            let result = await Task.detached(priority: .userInitiated) {
-                let fileManager = FileManager.default
-                var removedCount = 0
-                var failedCount = 0
-                var reclaimedBytes: Int64 = 0
-
-                for file in filesToDelete {
-                    let url = URL(fileURLWithPath: file.path)
-                    do {
-                        if fileManager.fileExists(atPath: url.path) {
-                            try fileManager.trashItem(at: url, resultingItemURL: nil)
-                            removedCount += 1
-                            reclaimedBytes += file.filesize ?? 0
-                        }
-                    } catch {
-                        failedCount += 1
-                    }
-                }
-                return (removedCount, failedCount, reclaimedBytes)
-            }.value
-
-            manualAppliedGroupsCount += 1
-            manualAppliedFilesCount += result.0
-            manualFailedDeleteCount += result.1
-            manualReclaimedBytes += result.2
-
-            let groupHash = groupState.group.contentHash
-            manualQueue.remove(at: manualCurrentIndex)
-            exactDuplicateGroups.removeAll { $0.contentHash == groupHash }
-            normalizeManualCurrentIndex()
-
-            if result.1 > 0 {
-                exactDuplicateScanError = "Failed to move \(result.1) file(s) to Trash."
-            }
-        }
+    func restoreCurrentManualGroupAction() {
+        guard manualQueue.indices.contains(manualCurrentIndex) else { return }
+        manualQueue[manualCurrentIndex].status = .pending
     }
 
     func chooseKeepParentForChildConflict() {
@@ -497,6 +551,35 @@ final class IndexingSettingsViewModel: ObservableObject {
     var manualCurrentGroupState: ManualDuplicateGroupState? {
         guard manualQueue.indices.contains(manualCurrentIndex) else { return nil }
         return manualQueue[manualCurrentIndex]
+    }
+
+    var manualCurrentGroupHasStagedApply: Bool {
+        manualCurrentGroupState?.status == .stagedApply
+    }
+
+    var hasManualStagedCleanupActions: Bool {
+        manualQueue.contains { $0.status == .stagedApply }
+    }
+
+    var manualStagedCleanupGroupCount: Int {
+        manualQueue.filter { $0.status == .stagedApply }.count
+    }
+
+    var manualStagedCleanupFileCount: Int {
+        stagedManualFilesToDelete().count
+    }
+
+    var manualStagedCleanupEstimatedReclaimBytes: Int64 {
+        stagedManualFilesToDelete().reduce(0) { $0 + ($1.filesize ?? 0) }
+    }
+
+    var manualCurrentGroupStagedRemovalPaths: Set<String> {
+        guard let state = manualCurrentGroupState, state.status == .stagedApply, let keeperPath = state.keeperPath else {
+            return []
+        }
+        return Set(state.group.files.compactMap { file in
+            file.path == keeperPath ? nil : file.path
+        })
     }
 
     var manualGroupProgressText: String {
@@ -655,6 +738,143 @@ final class IndexingSettingsViewModel: ObservableObject {
         return rekordboxCanonicalPaths.contains(TrackIndexStore.canonicalize(path: path))
     }
 
+    private func moveToNextManualGroup() {
+        guard !manualQueue.isEmpty else { return }
+        let nextIndex = manualCurrentIndex + 1
+        manualCurrentIndex = min(max(0, manualQueue.count - 1), nextIndex)
+    }
+
+    private func resetManualReviewSessionDecisions() {
+        for index in manualQueue.indices {
+            manualQueue[index].status = .pending
+        }
+        normalizeManualCurrentIndex()
+    }
+
+    private func stagedManualFilesToDelete() -> [ExactDuplicateFileEntry] {
+        manualQueue.flatMap { state -> [ExactDuplicateFileEntry] in
+            guard state.status == .stagedApply, let keeperPath = state.keeperPath else { return [] }
+            return state.group.files.filter { $0.path != keeperPath }
+        }
+    }
+
+    private static func trashDuplicateFiles(_ files: [ExactDuplicateFileEntry]) async -> (removedCount: Int, failedCount: Int, reclaimedBytes: Int64) {
+        await Task.detached(priority: .userInitiated) {
+            let fileManager = FileManager.default
+            var removedCount = 0
+            var failedCount = 0
+            var reclaimedBytes: Int64 = 0
+
+            for file in files {
+                let url = URL(fileURLWithPath: file.path)
+                do {
+                    if fileManager.fileExists(atPath: url.path) {
+                        try fileManager.trashItem(at: url, resultingItemURL: nil)
+                        removedCount += 1
+                        reclaimedBytes += file.filesize ?? 0
+                    }
+                } catch {
+                    failedCount += 1
+                }
+            }
+
+            return (removedCount, failedCount, reclaimedBytes)
+        }.value
+    }
+
+    private static func trashDuplicateFilesForSmartCleanup(_ files: [ExactDuplicateFileEntry]) async -> SmartCleanupTrashResult {
+        await Task.detached(priority: .userInitiated) {
+            let fileManager = FileManager.default
+            var removedCount = 0
+            var failedCount = 0
+            var reclaimedBytes: Int64 = 0
+            var undoEntries: [SmartCleanupUndoEntry] = []
+
+            for file in files {
+                let originalURL = URL(fileURLWithPath: file.path)
+                do {
+                    if fileManager.fileExists(atPath: originalURL.path) {
+                        var resultingItemURL: NSURL?
+                        try fileManager.trashItem(at: originalURL, resultingItemURL: &resultingItemURL)
+                        removedCount += 1
+                        reclaimedBytes += file.filesize ?? 0
+                        if let trashedURL = resultingItemURL as URL? {
+                            undoEntries.append(
+                                SmartCleanupUndoEntry(
+                                    originalPath: originalURL.path,
+                                    trashedPath: trashedURL.path
+                                )
+                            )
+                        }
+                    }
+                } catch {
+                    failedCount += 1
+                }
+            }
+
+            return SmartCleanupTrashResult(
+                removedCount: removedCount,
+                failedCount: failedCount,
+                reclaimedBytes: reclaimedBytes,
+                undoEntries: undoEntries
+            )
+        }.value
+    }
+
+    private static func restoreSmartCleanupFiles(_ undoEntries: [SmartCleanupUndoEntry]) async -> (restoredCount: Int, failedCount: Int) {
+        await Task.detached(priority: .userInitiated) {
+            let fileManager = FileManager.default
+            var restoredCount = 0
+            var failedCount = 0
+
+            for entry in undoEntries {
+                let trashedURL = URL(fileURLWithPath: entry.trashedPath)
+                let originalURL = URL(fileURLWithPath: entry.originalPath)
+                do {
+                    guard fileManager.fileExists(atPath: trashedURL.path) else {
+                        failedCount += 1
+                        continue
+                    }
+                    if fileManager.fileExists(atPath: originalURL.path) {
+                        failedCount += 1
+                        continue
+                    }
+                    let parentURL = originalURL.deletingLastPathComponent()
+                    try fileManager.createDirectory(at: parentURL, withIntermediateDirectories: true)
+                    try fileManager.moveItem(at: trashedURL, to: originalURL)
+                    restoredCount += 1
+                } catch {
+                    failedCount += 1
+                }
+            }
+
+            return (restoredCount, failedCount)
+        }.value
+    }
+
+    private func armSmartCleanupUndoWindow(removedCount: Int, undoEntries: [SmartCleanupUndoEntry]) {
+        smartCleanupUndoDismissTask?.cancel()
+        smartCleanupUndoEntries = undoEntries
+        smartCleanupUndoToast = SmartCleanupUndoToast(
+            removedCount: removedCount,
+            expiresAt: Date().addingTimeInterval(10)
+        )
+        smartCleanupUndoDismissTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 10_000_000_000)
+            await MainActor.run {
+                guard let self else { return }
+                self.clearSmartCleanupUndoWindow()
+            }
+        }
+    }
+
+    private func clearSmartCleanupUndoWindow() {
+        smartCleanupUndoDismissTask?.cancel()
+        smartCleanupUndoDismissTask = nil
+        smartCleanupUndoEntries = []
+        smartCleanupUndoToast = nil
+    }
+
     private func normalizeManualCurrentIndex() {
         if manualQueue.isEmpty {
             manualCurrentIndex = 0
@@ -680,9 +900,15 @@ final class IndexingSettingsViewModel: ObservableObject {
                 } else {
                     resolvedKeeper = keeperStillExists ?? fallbackKeeper
                 }
+                let resolvedStatus: ManualDuplicateGroupStatus
+                if existing.status == .stagedApply, resolvedKeeper == nil {
+                    resolvedStatus = .pending
+                } else {
+                    resolvedStatus = existing.status
+                }
                 return ManualDuplicateGroupState(
                     group: group,
-                    status: existing.status,
+                    status: resolvedStatus,
                     keeperPath: resolvedKeeper
                 )
             }
@@ -715,6 +941,28 @@ struct SmartCleanupSummary: Sendable {
     let removedCount: Int
     let failedCount: Int
     let reclaimedBytes: Int64
+}
+
+struct SmartCleanupUndoToast: Sendable {
+    let removedCount: Int
+    let expiresAt: Date
+
+    var message: String {
+        let fileWord = removedCount == 1 ? "file" : "files"
+        return "Smart cleanup removed \(removedCount) \(fileWord). Undo is available for 10 seconds."
+    }
+}
+
+private struct SmartCleanupUndoEntry: Sendable {
+    let originalPath: String
+    let trashedPath: String
+}
+
+private struct SmartCleanupTrashResult: Sendable {
+    let removedCount: Int
+    let failedCount: Int
+    let reclaimedBytes: Int64
+    let undoEntries: [SmartCleanupUndoEntry]
 }
 
 enum SmartCleanupKeepRule: String, CaseIterable, Identifiable, Sendable {
@@ -766,6 +1014,7 @@ enum SmartCleanupScope: String, CaseIterable, Identifiable, Sendable {
 enum ManualDuplicateGroupStatus: String, Sendable {
     case pending
     case skipped
+    case stagedApply
 }
 
 struct ManualDuplicateGroupState: Identifiable, Sendable {

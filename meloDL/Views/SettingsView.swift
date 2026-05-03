@@ -575,6 +575,10 @@ private struct ExactDuplicateFinderSheet: View {
                     .foregroundStyle(smartCleanupSummary.failedCount > 0 ? .orange : .secondary)
             }
 
+            if let smartCleanupUndoToast = viewModel.smartCleanupUndoToast {
+                smartCleanupUndoToastView(smartCleanupUndoToast)
+            }
+
             if let rekordboxStatusText = viewModel.rekordboxStatusText {
                 Text(rekordboxStatusText)
                     .font(.caption)
@@ -673,6 +677,30 @@ private struct ExactDuplicateFinderSheet: View {
         } message: {
             Text(smartCleanupDialogMessage)
         }
+        .confirmationDialog(
+            "Confirm Manual Session",
+            isPresented: $viewModel.showManualSessionConfirmDialog,
+            titleVisibility: .visible
+        ) {
+            Button("Apply Session", role: .destructive) {
+                viewModel.confirmManualReviewSession()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(manualSessionDialogMessage)
+        }
+        .confirmationDialog(
+            "Cancel Manual Session",
+            isPresented: $viewModel.showManualSessionCancelDialog,
+            titleVisibility: .visible
+        ) {
+            Button("Discard Session Changes", role: .destructive) {
+                viewModel.cancelManualReviewSession()
+            }
+            Button("Continue Reviewing", role: .cancel) {}
+        } message: {
+            Text("This will discard all staged Keep/Skip decisions in this manual session and return to overview.")
+        }
     }
 
     private func metadataLabel(for file: ExactDuplicateFileEntry) -> Text {
@@ -717,58 +745,7 @@ private struct ExactDuplicateFinderSheet: View {
                 List {
                     Section {
                         ForEach(state.group.files) { file in
-                            let isSelectedKeeper = state.keeperPath == file.path
-                            let isRekordboxMatch = viewModel.isRekordboxMatched(filePath: file.path)
-                            HStack(alignment: .top, spacing: 10) {
-                                Button {
-                                    viewModel.selectManualKeeper(path: file.path)
-                                } label: {
-                                    Image(systemName: isSelectedKeeper ? "largecircle.fill.circle" : "circle")
-                                        .foregroundStyle(isSelectedKeeper ? Color.accentColor : .secondary)
-                                }
-                                .buttonStyle(.plain)
-                                .help("Set as keeper")
-
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(file.filename)
-                                        .font(.body)
-                                    Text(file.path)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                        .textSelection(.enabled)
-                                    metadataLabel(for: file)
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
-                                }
-                                Spacer(minLength: 0)
-                                VStack(alignment: .trailing, spacing: 6) {
-                                    Button("Preview") {
-                                        TrackPreviewService.shared.previewTrack(
-                                            atPath: file.path,
-                                            title: file.filename
-                                        )
-                                    }
-                                    .buttonStyle(.bordered)
-                                    .controlSize(.small)
-
-                                    if isRekordboxMatch {
-                                        rekordboxMatchTag
-                                    }
-                                }
-                            }
-                            .padding(8)
-                            .background(
-                                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .fill(isSelectedKeeper ? Color.accentColor.opacity(0.12) : Color.clear)
-                            )
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .stroke(isSelectedKeeper ? Color.accentColor.opacity(0.28) : Color.clear, lineWidth: 1)
-                            )
-                            .contentShape(.rect)
-                            .onTapGesture {
-                                viewModel.selectManualKeeper(path: file.path)
-                            }
+                            manualReviewRow(file: file, state: state)
                         }
                     } header: {
                         Text("Hash \(state.group.contentHash.prefix(12))... (\(state.group.files.count) files)")
@@ -785,9 +762,77 @@ private struct ExactDuplicateFinderSheet: View {
         }
     }
 
+    @ViewBuilder
+    private func manualReviewRow(file: ExactDuplicateFileEntry, state: ManualDuplicateGroupState) -> some View {
+        let isSelectedKeeper = state.keeperPath == file.path
+        let isRekordboxMatch = viewModel.isRekordboxMatched(filePath: file.path)
+        let isStagedForTrash = viewModel.manualCurrentGroupStagedRemovalPaths.contains(file.path)
+        let rowFillColor: Color = isSelectedKeeper
+            ? Color.accentColor.opacity(0.12)
+            : (isStagedForTrash ? Color.red.opacity(0.10) : .clear)
+        let rowStrokeColor: Color = isSelectedKeeper
+            ? Color.accentColor.opacity(0.28)
+            : (isStagedForTrash ? Color.red.opacity(0.30) : .clear)
+
+        HStack(alignment: .top, spacing: 10) {
+            Button {
+                viewModel.selectManualKeeper(path: file.path)
+            } label: {
+                Image(systemName: isSelectedKeeper ? "largecircle.fill.circle" : "circle")
+                    .foregroundStyle(isSelectedKeeper ? Color.accentColor : .secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Set as keeper")
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(file.filename)
+                    .font(.body)
+                Text(file.path)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                metadataLabel(for: file)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+            VStack(alignment: .trailing, spacing: 6) {
+                Button("Preview") {
+                    TrackPreviewService.shared.previewTrack(
+                        atPath: file.path,
+                        title: file.filename
+                    )
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+
+                if isRekordboxMatch {
+                    rekordboxMatchTag
+                }
+            }
+        }
+        .padding(8)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(rowFillColor)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(rowStrokeColor, lineWidth: 1)
+        )
+        .contentShape(.rect)
+        .onTapGesture {
+            viewModel.selectManualKeeper(path: file.path)
+        }
+    }
+
     private var manualStatsText: String {
         let reclaimed = ByteCountFormatter.string(fromByteCount: viewModel.manualReclaimedBytes, countStyle: .file)
-        return "Applied groups: \(viewModel.manualAppliedGroupsCount) | Removed files: \(viewModel.manualAppliedFilesCount) | Failed: \(viewModel.manualFailedDeleteCount) | Reclaimed: \(reclaimed) | Remaining groups: \(viewModel.manualRemainingGroupsCount)"
+        let stagedReclaim = ByteCountFormatter.string(
+            fromByteCount: viewModel.manualStagedCleanupEstimatedReclaimBytes,
+            countStyle: .file
+        )
+        return "Staged groups: \(viewModel.manualStagedCleanupGroupCount) | Staged files: \(viewModel.manualStagedCleanupFileCount) | Staged reclaim: \(stagedReclaim) | Applied groups: \(viewModel.manualAppliedGroupsCount) | Removed files: \(viewModel.manualAppliedFilesCount) | Failed: \(viewModel.manualFailedDeleteCount) | Reclaimed: \(reclaimed)"
     }
 
     @ViewBuilder
@@ -804,8 +849,12 @@ private struct ExactDuplicateFinderSheet: View {
                 }
                 .disabled(viewModel.manualCurrentIndex >= viewModel.manualRemainingGroupsCount - 1 || viewModel.isRunningSmartCleanup)
 
-                Button("Keep Selected, Trash Others") {
-                    viewModel.applyCurrentManualGroup()
+                Button(viewModel.manualCurrentGroupHasStagedApply ? "Restore" : "Keep Selected, Trash Others") {
+                    if viewModel.manualCurrentGroupHasStagedApply {
+                        viewModel.restoreCurrentManualGroupAction()
+                    } else {
+                        viewModel.applyCurrentManualGroup()
+                    }
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(viewModel.manualCurrentGroupState == nil || viewModel.isRunningSmartCleanup)
@@ -864,10 +913,16 @@ private struct ExactDuplicateFinderSheet: View {
             Spacer(minLength: 0)
 
             if viewModel.isManualReviewMode {
-                Button("Back") {
-                    viewModel.showOverviewMode()
+                Button("Cancel Session") {
+                    viewModel.showManualSessionCancelDialog = true
                 }
                 .disabled(viewModel.isRunningSmartCleanup)
+
+                Button("Confirm Session") {
+                    viewModel.showManualSessionConfirmDialog = true
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(viewModel.isRunningSmartCleanup || !viewModel.hasManualStagedCleanupActions)
             } else {
                 Button("Close") {
                     dismiss()
@@ -925,6 +980,61 @@ private struct ExactDuplicateFinderSheet: View {
         return """
         Clean All will process your full duplicate library (\(allGroups) groups, \(allFiles) files, about \(allReclaim)).
         Import a Rekordbox XML file if you want the Rekordbox-only cleanup option.
+        """
+    }
+
+    @ViewBuilder
+    private func smartCleanupUndoToastView(_ toast: SmartCleanupUndoToast) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .center, spacing: 10) {
+                Text(toast.message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+                Button("Undo") {
+                    viewModel.undoLastSmartCleanup()
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .disabled(viewModel.isRunningSmartCleanup || viewModel.isScanningExactDuplicates)
+            }
+
+            TimelineView(.periodic(from: .now, by: 1.0 / 60.0)) { context in
+                let remaining = max(0, toast.expiresAt.timeIntervalSince(context.date))
+                let progress = min(1, max(0, remaining / 10))
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        .fill(Color.secondary.opacity(0.18))
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        .fill(Color.accentColor.opacity(0.9))
+                        .scaleEffect(x: progress, y: 1, anchor: .leading)
+                }
+                .frame(height: 6)
+            }
+            .frame(height: 6)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private var manualSessionDialogMessage: String {
+        let groups = viewModel.manualStagedCleanupGroupCount
+        let files = viewModel.manualStagedCleanupFileCount
+        let reclaim = ByteCountFormatter.string(
+            fromByteCount: viewModel.manualStagedCleanupEstimatedReclaimBytes,
+            countStyle: .file
+        )
+
+        if files == 0 {
+            return "No staged actions to apply. Cancel and keep reviewing, or apply to return to overview."
+        }
+
+        return """
+        This will move the staged duplicate files to Trash now.
+        Groups affected: \(groups)
+        Files to move: \(files)
+        Estimated reclaim: \(reclaim)
         """
     }
 }
