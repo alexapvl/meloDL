@@ -12,6 +12,7 @@ private enum SettingsKeys {
     static let menubarOnlyMode = "settings.menubarOnlyMode"
     static let openAtLogin = "settings.openAtLogin"
     static let onboardingCompleted = "settings.onboardingCompleted"
+    static let forcedOnboardingV102Applied = "settings.forcedOnboardingV102Applied"
 }
 
 @main
@@ -29,6 +30,11 @@ struct meloDLApp: App {
 
     init() {
         let defaults = UserDefaults.standard
+        if !defaults.bool(forKey: SettingsKeys.forcedOnboardingV102Applied) {
+            defaults.set(false, forKey: SettingsKeys.onboardingCompleted)
+            defaults.set(true, forKey: SettingsKeys.forcedOnboardingV102Applied)
+        }
+
         if CommandLine.arguments.contains(LaunchArguments.menubarOnly) {
             defaults.set(true, forKey: SettingsKeys.menubarOnlyMode)
         } else if CommandLine.arguments.contains(LaunchArguments.windowMode) {
