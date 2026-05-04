@@ -12,7 +12,9 @@
 
 ## What it does
 
-- Accepts media URLs and downloads audio tracks.
+- Accepts media URLs and downloads audio tracks, including playlists.
+- Supports many websites via `yt-dlp`, including YouTube (Music), SoundCloud, TikTok, Instagram, and X (Twitter) and many more.
+- Full supported website list: https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md
 - Supports configurable output format and quality.
 - Supports playlist downloads with queue/status UI.
 - Prevents obvious re-downloads by checking an indexed local library before downloading.
