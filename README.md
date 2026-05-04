@@ -2,9 +2,13 @@
 
 `meloDL` is a native macOS app for downloading and converting audio with a clean, settings-first workflow.
 
+<p align="center">
+  <img src="docs/images/meloDL-preview.gif" alt="meloDL app preview" width="720" />
+</p>
+
 ## Platform
 
-- macOS (SwiftUI desktop app)
+- macOS 15.5+ (SwiftUI desktop app)
 
 ## What it does
 
