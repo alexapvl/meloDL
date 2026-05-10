@@ -75,7 +75,10 @@ actor BinaryManager {
     private func seedBundledYtdlpIfNeeded() throws {
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
         let dest = ytdlpPath
-        let shouldSeed = !FileManager.default.fileExists(atPath: dest.path) || versions.bundledYtdlpSeedBuild != build
+        let hasCachedYtdlp = FileManager.default.fileExists(atPath: dest.path)
+        let hasGitHubManagedYtdlp = versions.ytdlp != nil
+        let hasOlderBundledYtdlp = versions.bundledYtdlpSeedBuild != nil && versions.bundledYtdlpSeedBuild != build
+        let shouldSeed = !hasCachedYtdlp || (!hasGitHubManagedYtdlp && hasOlderBundledYtdlp)
         guard shouldSeed else { return }
 
         guard let bundled = Bundle.main.url(forResource: "yt-dlp", withExtension: nil) else {

@@ -28,6 +28,12 @@ if [[ "${1:-}" == "--notarize" ]]; then
     NOTARIZE=true
 fi
 
+echo "==> Updating bundled yt-dlp..."
+curl --fail --location --silent --show-error \
+    --output "$PROJECT_DIR/meloDL/yt-dlp" \
+    "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos"
+chmod +x "$PROJECT_DIR/meloDL/yt-dlp"
+
 echo "==> Cleaning build directory..."
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
