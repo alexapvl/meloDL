@@ -20,6 +20,7 @@ ARCHIVE_PATH="$BUILD_DIR/$SCHEME.xcarchive"
 APP_PATH="$BUILD_DIR/$SCHEME.app"
 DMG_PATH="$BUILD_DIR/$SCHEME.dmg"
 DMG_STAGING_DIR="$BUILD_DIR/dmg-staging"
+HELPER_ENTITLEMENTS="$PROJECT_DIR/scripts/helper-binary.entitlements"
 TEAM_ID="THZ82CJTKM"
 NOTARIZE=false
 
@@ -69,7 +70,7 @@ if [[ -z "$SIGNING_IDENTITY_HASH" ]]; then
     exit 1
 fi
 
-for binary in ffmpeg ffprobe yt-dlp; do
+for binary in ffmpeg ffprobe; do
     binary_path="$APP_PATH/Contents/Resources/$binary"
     if [[ -f "$binary_path" ]]; then
         codesign --force --timestamp --options runtime --sign "$SIGNING_IDENTITY_HASH" "$binary_path"
@@ -77,6 +78,13 @@ for binary in ffmpeg ffprobe yt-dlp; do
         echo "WARNING: Expected bundled binary not found: $binary_path"
     fi
 done
+
+binary_path="$APP_PATH/Contents/Resources/yt-dlp"
+if [[ -f "$binary_path" ]]; then
+    codesign --force --timestamp --options runtime --entitlements "$HELPER_ENTITLEMENTS" --sign "$SIGNING_IDENTITY_HASH" "$binary_path"
+else
+    echo "WARNING: Expected bundled binary not found: $binary_path"
+fi
 
 codesign --force --timestamp --options runtime --preserve-metadata=entitlements --sign "$SIGNING_IDENTITY_HASH" "$APP_PATH"
 codesign --verify --deep --strict --verbose=2 "$APP_PATH"
@@ -109,6 +117,9 @@ else
         -format UDZO \
         "$DMG_PATH"
 fi
+
+echo "==> Signing DMG..."
+codesign --force --timestamp --sign "$SIGNING_IDENTITY_HASH" "$DMG_PATH"
 
 if $NOTARIZE; then
     echo "==> Notarizing DMG..."

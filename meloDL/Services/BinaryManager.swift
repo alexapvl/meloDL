@@ -23,10 +23,12 @@ actor BinaryManager {
     struct BinaryVersions: Codable {
         var ytdlp: VersionEntry?
         var ffmpeg: VersionEntry?
+        var bundledYtdlpSeedBuild: String?
 
         enum CodingKeys: String, CodingKey {
             case ytdlp = "yt-dlp"
             case ffmpeg
+            case bundledYtdlpSeedBuild
         }
     }
 
@@ -41,10 +43,11 @@ actor BinaryManager {
 
     func ensureBinaries() async throws {
         try createDirectoryIfNeeded()
-        try seedFromBundleIfMissing("yt-dlp")
+        loadVersions()
+        try seedBundledYtdlpIfNeeded()
         try seedFromBundleIfMissing("ffmpeg")
         try seedFromBundleIfMissing("ffprobe")
-        loadVersions()
+        try saveVersions()
         logger.info("Binaries ready at \(self.appSupportDir.path)")
     }
 
@@ -67,6 +70,27 @@ actor BinaryManager {
         try FileManager.default.copyItem(at: bundled, to: dest)
         try makeExecutable(dest)
         logger.info("Seeded \(name) from app bundle")
+    }
+
+    private func seedBundledYtdlpIfNeeded() throws {
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
+        let dest = ytdlpPath
+        let shouldSeed = !FileManager.default.fileExists(atPath: dest.path) || versions.bundledYtdlpSeedBuild != build
+        guard shouldSeed else { return }
+
+        guard let bundled = Bundle.main.url(forResource: "yt-dlp", withExtension: nil) else {
+            logger.warning("Bundled binary yt-dlp not found in app bundle")
+            return
+        }
+
+        if FileManager.default.fileExists(atPath: dest.path) {
+            try FileManager.default.removeItem(at: dest)
+        }
+
+        try FileManager.default.copyItem(at: bundled, to: dest)
+        try makeExecutable(dest)
+        versions.bundledYtdlpSeedBuild = build
+        logger.info("Seeded yt-dlp from app bundle for build \(build)")
     }
 
     private func makeExecutable(_ url: URL) throws {
