@@ -6,6 +6,21 @@ import UniformTypeIdentifiers
 struct SettingsView: View {
     let updater: SPUUpdater
     @ObservedObject var appSettings: AppSettings
+    #if DEBUG
+    let onReplayOnboarding: () -> Void
+    #endif
+
+    init(
+        updater: SPUUpdater,
+        appSettings: AppSettings,
+        onReplayOnboarding: (() -> Void)? = nil
+    ) {
+        self.updater = updater
+        self.appSettings = appSettings
+        #if DEBUG
+        self.onReplayOnboarding = onReplayOnboarding ?? {}
+        #endif
+    }
 
     var body: some View {
         TabView {
@@ -43,6 +58,16 @@ struct SettingsView: View {
                 .tabItem {
                     Label("Support", systemImage: "lifepreserver")
                 }
+
+            #if DEBUG
+            DebugSettingsView(
+                appSettings: appSettings,
+                onReplayOnboarding: onReplayOnboarding
+            )
+            .tabItem {
+                Label("Debug", systemImage: "hammer")
+            }
+            #endif
         }
         .frame(width: 520, height: 380)
     }
@@ -164,6 +189,48 @@ struct UpdateSettingsView: View {
         }
     }
 }
+
+#if DEBUG
+struct DebugSettingsView: View {
+    @ObservedObject var appSettings: AppSettings
+    let onReplayOnboarding: () -> Void
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        SettingsPage(title: "Debug", subtitle: "Development-only tools for app state.") {
+            VStack(alignment: .leading, spacing: SettingsLayout.pageSpacing) {
+                SettingsSection(title: "Onboarding") {
+                    VStack(alignment: .leading, spacing: SettingsLayout.rowSpacing) {
+                        Button {
+                            onReplayOnboarding()
+                            openWindow(id: AppWindowID.main)
+                            focusMainWindow()
+                        } label: {
+                            Label("Replay Onboarding", systemImage: "arrow.clockwise")
+                        }
+                        .buttonStyle(.borderedProminent)
+
+                        Text("Marks onboarding as incomplete and opens the main window so the first-run flow can be tested again.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        Text(appSettings.onboardingCompleted ? "Current state: completed" : "Current state: onboarding visible")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+    }
+
+    private func focusMainWindow() {
+        DispatchQueue.main.async {
+            NSApplication.shared.activate(ignoringOtherApps: true)
+            NSApplication.shared.windows.first(where: { $0.level == .normal })?.makeKeyAndOrderFront(nil)
+        }
+    }
+}
+#endif
 
 struct DownloadsSettingsView: View {
     @ObservedObject var appSettings: AppSettings

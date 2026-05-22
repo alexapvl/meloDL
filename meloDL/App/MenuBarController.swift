@@ -48,6 +48,7 @@ final class MenuBarController: NSObject {
             onCheckAppUpdates: onCheckAllUpdates,
             onQuit: onQuit
         )
+        .disableFocusRings()
         popover.contentViewController = NSHostingController(rootView: rootView)
         popover.contentSize = NSSize(width: 580, height: 640)
         popover.behavior = .transient

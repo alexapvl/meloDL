@@ -15,6 +15,10 @@ private enum SettingsKeys {
     static let forcedOnboardingV102Applied = "settings.forcedOnboardingV102Applied"
 }
 
+enum AppWindowID {
+    static let main = "main"
+}
+
 @main
 struct meloDLApp: App {
     @StateObject private var appSettings = AppSettings()
@@ -62,7 +66,7 @@ struct meloDLApp: App {
     }
 
     private var mainWindowScene: some Scene {
-        WindowGroup {
+        WindowGroup(id: AppWindowID.main) {
             if launchMenubarOnlyMode && appSettings.onboardingCompleted {
                 Color.clear
                     .frame(width: 0, height: 0)
@@ -83,7 +87,10 @@ struct meloDLApp: App {
                             onCheckAppUpdates: checkForAppUpdates
                         )
                     } else {
-                        OnboardingView(appSettings: appSettings) {
+                        OnboardingView(
+                            appSettings: appSettings,
+                            updater: updaterController.updater
+                        ) {
                             focusMainWindowIfNeeded()
                         }
                     }
@@ -93,6 +100,7 @@ struct meloDLApp: App {
                     menuBarController = nil
                     focusMainWindowIfNeeded()
                 }
+                .disableFocusRings()
             }
         }
         .commands {
@@ -108,10 +116,20 @@ struct meloDLApp: App {
 
     private var settingsScene: some Scene {
         Settings {
+            #if DEBUG
+            SettingsView(
+                updater: updaterController.updater,
+                appSettings: appSettings,
+                onReplayOnboarding: replayOnboarding
+            )
+            .disableFocusRings()
+            #else
             SettingsView(
                 updater: updaterController.updater,
                 appSettings: appSettings
             )
+            .disableFocusRings()
+            #endif
         }
     }
 
@@ -126,6 +144,16 @@ struct meloDLApp: App {
             await GitHubUpdateService.shared.checkForUpdates()
         }
     }
+
+    #if DEBUG
+    private func replayOnboarding() {
+        appSettings.onboardingCompleted = false
+        AppModeController.applyMenubarOnlyMode(false)
+        DispatchQueue.main.async {
+            NSApplication.shared.activate(ignoringOtherApps: true)
+        }
+    }
+    #endif
 
     private func focusMainWindowIfNeeded() {
         guard !launchMenubarOnlyMode else { return }
