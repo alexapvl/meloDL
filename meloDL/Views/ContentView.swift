@@ -40,13 +40,13 @@ struct ContentView: View {
 
                         if let onOpenSettings {
                             Button(action: onOpenSettings) {
-                                Label("Advanced Settings", systemImage: "gear")
+                                Label("Settings", systemImage: "gear")
                             }
                             .buttonStyle(.bordered)
                             .disabled(viewModel.isDownloading)
                         } else {
                             SettingsLink {
-                                Label("Advanced Settings", systemImage: "gear")
+                                Label("Settings", systemImage: "gear")
                             }
                             .buttonStyle(.bordered)
                             .disabled(viewModel.isDownloading)

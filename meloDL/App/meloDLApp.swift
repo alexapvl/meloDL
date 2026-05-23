@@ -68,56 +68,10 @@ struct meloDLApp: App {
 
     private var mainWindowScene: some Scene {
         WindowGroup(id: AppWindowID.main) {
-            if appSettings.onboardingCompleted && isShowingSettings {
-                #if DEBUG
-                SettingsView(
-                    updater: updaterController.updater,
-                    appSettings: appSettings,
-                    onDismiss: closeSettingsPage,
-                    onReplayOnboarding: replayOnboarding
-                )
-                .disableFocusRings()
-                #else
-                SettingsView(
-                    updater: updaterController.updater,
-                    appSettings: appSettings,
-                    onDismiss: closeSettingsPage
-                )
-                .disableFocusRings()
-                #endif
-            } else if launchMenubarOnlyMode && appSettings.onboardingCompleted {
-                Color.clear
+            mainWindowContent
+            .background {
+                MainWindowChromeConfigurator()
                     .frame(width: 0, height: 0)
-                    .onAppear {
-                        triggerLaunchReindexIfNeeded()
-                        configureMenuBarControllerIfNeeded()
-                        DispatchQueue.main.async {
-                            closeMenubarLaunchPlaceholderWindowsIfNeeded()
-                        }
-                    }
-            } else {
-                Group {
-                    if appSettings.onboardingCompleted {
-                        ContentView(
-                            appSettings: appSettings,
-                            onCheckAppUpdates: checkForAppUpdates,
-                            onOpenSettings: showSettingsPage
-                        )
-                    } else {
-                        OnboardingView(
-                            appSettings: appSettings,
-                            updater: updaterController.updater
-                        ) {
-                            focusMainWindowIfNeeded()
-                        }
-                    }
-                }
-                .onAppear {
-                    triggerLaunchReindexIfNeeded()
-                    menuBarController = nil
-                    focusMainWindowIfNeeded()
-                }
-                .disableFocusRings()
             }
         }
         .windowStyle(.hiddenTitleBar)
@@ -134,6 +88,61 @@ struct meloDLApp: App {
                 Button("Settings...", action: showSettingsPage)
                     .keyboardShortcut(",", modifiers: .command)
             }
+        }
+    }
+
+    @ViewBuilder
+    private var mainWindowContent: some View {
+        if appSettings.onboardingCompleted && isShowingSettings {
+            #if DEBUG
+            SettingsView(
+                updater: updaterController.updater,
+                appSettings: appSettings,
+                onDismiss: closeSettingsPage,
+                onReplayOnboarding: replayOnboarding
+            )
+            .disableFocusRings()
+            #else
+            SettingsView(
+                updater: updaterController.updater,
+                appSettings: appSettings,
+                onDismiss: closeSettingsPage
+            )
+            .disableFocusRings()
+            #endif
+        } else if launchMenubarOnlyMode && appSettings.onboardingCompleted {
+            Color.clear
+                .frame(width: 0, height: 0)
+                .onAppear {
+                    triggerLaunchReindexIfNeeded()
+                    configureMenuBarControllerIfNeeded()
+                    DispatchQueue.main.async {
+                        closeMenubarLaunchPlaceholderWindowsIfNeeded()
+                    }
+                }
+        } else {
+            Group {
+                if appSettings.onboardingCompleted {
+                    ContentView(
+                        appSettings: appSettings,
+                        onCheckAppUpdates: checkForAppUpdates,
+                        onOpenSettings: showSettingsPage
+                    )
+                } else {
+                    OnboardingView(
+                        appSettings: appSettings,
+                        updater: updaterController.updater
+                    ) {
+                        focusMainWindowIfNeeded()
+                    }
+                }
+            }
+            .onAppear {
+                triggerLaunchReindexIfNeeded()
+                menuBarController = nil
+                focusMainWindowIfNeeded()
+            }
+            .disableFocusRings()
         }
     }
 
@@ -257,6 +266,27 @@ private final class DownloadNotificationCenterDelegate: NSObject, UNUserNotifica
                                 willPresent notification: UNNotification,
                                 withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
         completionHandler([.banner, .sound])
+    }
+}
+
+private struct MainWindowChromeConfigurator: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        configureWindow(from: view)
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        configureWindow(from: nsView)
+    }
+
+    private func configureWindow(from view: NSView) {
+        DispatchQueue.main.async {
+            guard let window = view.window else { return }
+            window.titleVisibility = .hidden
+            window.titlebarAppearsTransparent = true
+            window.styleMask.insert(.fullSizeContentView)
+        }
     }
 }
 

@@ -32,6 +32,7 @@ struct SettingsView: View {
             sidebar
 
             Divider()
+                .ignoresSafeArea(.container, edges: .top)
 
             selectedPage
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -61,7 +62,6 @@ struct SettingsView: View {
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
-            .padding(.top, SettingsLayout.sidebarTopPadding)
             .padding(.bottom, 12)
 
             ForEach(SettingsDestination.allCases, id: \.self) { destination in
@@ -75,11 +75,13 @@ struct SettingsView: View {
 
             Spacer(minLength: 0)
         }
+        .padding(.top, SettingsLayout.sidebarContentTopInset)
         .padding(.horizontal, 6)
-        .padding(.bottom, 10)
-        .frame(width: 210)
+        .padding(.bottom, SettingsLayout.sidebarContentBottomPadding)
+        .frame(width: SettingsLayout.sidebarWidth)
         .frame(maxHeight: .infinity, alignment: .topLeading)
         .background(sidebarBackground)
+        .ignoresSafeArea(.container, edges: .top)
     }
 
     private var sidebarBackground: Color {
@@ -207,7 +209,9 @@ private enum SettingsLayout {
     static let pageHorizontalPadding: CGFloat = 44
     static let pageTopPadding: CGFloat = 46
     static let pageBottomPadding: CGFloat = 28
-    static let sidebarTopPadding: CGFloat = 48
+    static let sidebarWidth: CGFloat = 210
+    static let sidebarContentTopInset: CGFloat = 64
+    static let sidebarContentBottomPadding: CGFloat = 16
     static let pageSpacing: CGFloat = 34
     static let sectionSpacing: CGFloat = 12
     static let rowSpacing: CGFloat = 0
@@ -215,8 +219,8 @@ private enum SettingsLayout {
 }
 
 private enum SettingsTheme {
-    static let sidebarActiveBackground = Color(nsColor: .controlBackgroundColor).opacity(0.42)
-    static let sidebarInactiveBackground = Color(nsColor: .controlBackgroundColor).opacity(0.22)
+    static let sidebarActiveBackground = Color.black.opacity(0.28)
+    static let sidebarInactiveBackground = Color.black.opacity(0.2)
     static let contentBackground = Color(nsColor: .windowBackgroundColor).opacity(0.96)
     static let cardBackground = Color(nsColor: .controlBackgroundColor).opacity(0.58)
     static let cardStroke = Color.secondary.opacity(0.18)
