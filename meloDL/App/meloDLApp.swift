@@ -92,9 +92,7 @@ struct meloDLApp: App {
                         triggerLaunchReindexIfNeeded()
                         configureMenuBarControllerIfNeeded()
                         DispatchQueue.main.async {
-                            for window in NSApplication.shared.windows where window.level == .normal {
-                                window.close()
-                            }
+                            closeMenubarLaunchPlaceholderWindowsIfNeeded()
                         }
                     }
             } else {
@@ -165,10 +163,6 @@ struct meloDLApp: App {
     private func showSettingsPage() {
         isShowingSettings = true
 
-        if launchMenubarOnlyMode {
-            AppModeController.applyMenubarOnlyMode(false)
-        }
-
         if mainAppWindow() == nil {
             openWindow(id: AppWindowID.main)
         }
@@ -205,6 +199,14 @@ struct meloDLApp: App {
     private func mainAppWindow() -> NSWindow? {
         NSApplication.shared.windows.first {
             $0.level == .normal && $0.canBecomeKey && !$0.isMiniaturized
+        }
+    }
+
+    private func closeMenubarLaunchPlaceholderWindowsIfNeeded() {
+        guard launchMenubarOnlyMode, appSettings.onboardingCompleted, !isShowingSettings else { return }
+
+        for window in NSApplication.shared.windows where window.level == .normal {
+            window.close()
         }
     }
 
