@@ -7,12 +7,14 @@ final class MenuBarController: NSObject {
     private let popover: NSPopover
     private let appSettings: AppSettings
     private let onCheckAllUpdates: () -> Void
+    private let onOpenSettings: () -> Void
     private let onSwitchToDockMode: () -> Void
     private let onQuit: () -> Void
 
     init(
         appSettings: AppSettings,
         onCheckAllUpdates: @escaping () -> Void,
+        onOpenSettings: @escaping () -> Void,
         onSwitchToDockMode: @escaping () -> Void,
         onQuit: @escaping () -> Void
     ) {
@@ -20,6 +22,7 @@ final class MenuBarController: NSObject {
         self.popover = NSPopover()
         self.appSettings = appSettings
         self.onCheckAllUpdates = onCheckAllUpdates
+        self.onOpenSettings = onOpenSettings
         self.onSwitchToDockMode = onSwitchToDockMode
         self.onQuit = onQuit
         super.init()
@@ -46,6 +49,7 @@ final class MenuBarController: NSObject {
         let rootView = MenuBarContentView(
             appSettings: appSettings,
             onCheckAppUpdates: onCheckAllUpdates,
+            onOpenSettings: onOpenSettings,
             onQuit: onQuit
         )
         .disableFocusRings()

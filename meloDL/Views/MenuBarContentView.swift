@@ -4,8 +4,8 @@ import SwiftUI
 struct MenuBarContentView: View {
     let appSettings: AppSettings
     let onCheckAppUpdates: () -> Void
+    let onOpenSettings: () -> Void
     let onQuit: () -> Void
-    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         VStack(spacing: 0) {
@@ -14,7 +14,7 @@ struct MenuBarContentView: View {
                 onCheckAppUpdates: onCheckAppUpdates,
                 onOpenSettings: {
                     NSApp.activate(ignoringOtherApps: true)
-                    openSettings()
+                    onOpenSettings()
                 }
             )
             .frame(width: 580, height: 600)

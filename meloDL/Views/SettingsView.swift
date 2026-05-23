@@ -6,79 +6,282 @@ import UniformTypeIdentifiers
 struct SettingsView: View {
     let updater: SPUUpdater
     @ObservedObject var appSettings: AppSettings
+    let onDismiss: () -> Void
     #if DEBUG
     let onReplayOnboarding: () -> Void
     #endif
+    @State private var selection: SettingsDestination = .downloads
+    @Environment(\.controlActiveState) private var controlActiveState
 
     init(
         updater: SPUUpdater,
         appSettings: AppSettings,
+        onDismiss: @escaping () -> Void = {},
         onReplayOnboarding: (() -> Void)? = nil
     ) {
         self.updater = updater
         self.appSettings = appSettings
+        self.onDismiss = onDismiss
         #if DEBUG
         self.onReplayOnboarding = onReplayOnboarding ?? {}
         #endif
     }
 
     var body: some View {
-        TabView {
+        HStack(spacing: 0) {
+            sidebar
+
+            Divider()
+
+            selectedPage
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .background(SettingsTheme.contentBackground)
+        .overlay {
+            KeyEventMonitor(onEscape: onDismiss)
+                .frame(width: 0, height: 0)
+        }
+        .frame(minWidth: 820, idealWidth: 900, minHeight: 600, idealHeight: 640)
+        .onExitCommand(perform: onDismiss)
+    }
+
+    private var sidebar: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Button(action: onDismiss) {
+                HStack(spacing: 10) {
+                    Image(systemName: "arrow.left")
+                        .font(.system(size: 15, weight: .regular))
+                        .frame(width: 18)
+                    Text("Back to app")
+                        .font(.callout)
+                }
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .padding(.top, SettingsLayout.sidebarTopPadding)
+            .padding(.bottom, 12)
+
+            ForEach(SettingsDestination.allCases, id: \.self) { destination in
+                SettingsSidebarRow(
+                    destination: destination,
+                    isSelected: selection == destination
+                ) {
+                    selection = destination
+                }
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 6)
+        .padding(.bottom, 10)
+        .frame(width: 210)
+        .frame(maxHeight: .infinity, alignment: .topLeading)
+        .background(sidebarBackground)
+    }
+
+    private var sidebarBackground: Color {
+        controlActiveState == .inactive
+            ? SettingsTheme.sidebarInactiveBackground
+            : SettingsTheme.sidebarActiveBackground
+    }
+
+    @ViewBuilder
+    private var selectedPage: some View {
+        switch selection {
+        case .downloads:
             DownloadsSettingsView(appSettings: appSettings)
-                .tabItem {
-                    Label("Downloads", systemImage: "arrow.down.circle")
-                }
-
+        case .behavior:
             BehaviorSettingsView(appSettings: appSettings)
-                .tabItem {
-                    Label("Behavior", systemImage: "switch.2")
-                }
-
+        case .indexing:
             IndexingSettingsView(appSettings: appSettings)
-                .tabItem {
-                    Label("Indexing", systemImage: "magnifyingglass")
-                }
-
+        case .updates:
             UpdateSettingsView(updater: updater)
-                .tabItem {
-                    Label("Updates", systemImage: "arrow.triangle.2.circlepath")
-                }
-
+        case .about:
             AboutSettingsView()
-                .tabItem {
-                    Label("About", systemImage: "info.circle")
-                }
-
+        case .credits:
             CreditsSettingsView()
-                .tabItem {
-                    Label("Credits", systemImage: "person.3")
-                }
-
+        case .support:
             SupportSettingsView()
-                .tabItem {
-                    Label("Support", systemImage: "lifepreserver")
-                }
-
-            #if DEBUG
+        #if DEBUG
+        case .debug:
             DebugSettingsView(
                 appSettings: appSettings,
                 onReplayOnboarding: onReplayOnboarding
             )
-            .tabItem {
-                Label("Debug", systemImage: "hammer")
-            }
-            #endif
+        #endif
         }
-        .frame(width: 520, height: 380)
+    }
+}
+
+private struct SettingsSidebarRow: View {
+    let destination: SettingsDestination
+    let isSelected: Bool
+    let action: () -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Image(systemName: destination.symbolName)
+                    .font(.system(size: 15, weight: .regular))
+                    .frame(width: 18)
+                Text(destination.title)
+                    .font(.callout)
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(isSelected ? Color.primary : Color.primary.opacity(0.9))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .background(rowBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .onHover { isHovered = $0 }
+    }
+
+    private var rowBackground: some View {
+        RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .fill(rowFill)
+    }
+
+    private var rowFill: Color {
+        if isSelected {
+            return Color.primary.opacity(0.14)
+        }
+        if isHovered {
+            return Color.primary.opacity(0.08)
+        }
+        return .clear
+    }
+}
+
+private enum SettingsDestination: CaseIterable {
+    case downloads
+    case behavior
+    case indexing
+    case updates
+    case about
+    case credits
+    case support
+    #if DEBUG
+    case debug
+    #endif
+
+    var title: String {
+        switch self {
+        case .downloads: return "Downloads"
+        case .behavior: return "Behavior"
+        case .indexing: return "Indexing"
+        case .updates: return "Updates"
+        case .about: return "About"
+        case .credits: return "Credits"
+        case .support: return "Support"
+        #if DEBUG
+        case .debug: return "Debug"
+        #endif
+        }
+    }
+
+    var symbolName: String {
+        switch self {
+        case .downloads: return "arrow.down.circle"
+        case .behavior: return "switch.2"
+        case .indexing: return "magnifyingglass"
+        case .updates: return "arrow.triangle.2.circlepath"
+        case .about: return "info.circle"
+        case .credits: return "person.3"
+        case .support: return "lifepreserver"
+        #if DEBUG
+        case .debug: return "hammer"
+        #endif
+        }
     }
 }
 
 private enum SettingsLayout {
-    static let pagePadding: CGFloat = 20
-    static let pageSpacing: CGFloat = 18
-    static let sectionSpacing: CGFloat = 10
-    static let rowSpacing: CGFloat = 8
-    static let subordinateIndent: CGFloat = 18
+    static let pageHorizontalPadding: CGFloat = 44
+    static let pageTopPadding: CGFloat = 46
+    static let pageBottomPadding: CGFloat = 28
+    static let sidebarTopPadding: CGFloat = 48
+    static let pageSpacing: CGFloat = 34
+    static let sectionSpacing: CGFloat = 12
+    static let rowSpacing: CGFloat = 0
+    static let contentMaxWidth: CGFloat = 615
+}
+
+private enum SettingsTheme {
+    static let sidebarActiveBackground = Color(nsColor: .controlBackgroundColor).opacity(0.42)
+    static let sidebarInactiveBackground = Color(nsColor: .controlBackgroundColor).opacity(0.22)
+    static let contentBackground = Color(nsColor: .windowBackgroundColor).opacity(0.96)
+    static let cardBackground = Color(nsColor: .controlBackgroundColor).opacity(0.58)
+    static let cardStroke = Color.secondary.opacity(0.18)
+    static let rowDivider = Color.secondary.opacity(0.13)
+}
+
+private struct KeyEventMonitor: NSViewRepresentable {
+    let onEscape: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onEscape: onEscape)
+    }
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        context.coordinator.view = view
+        context.coordinator.start()
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.onEscape = onEscape
+        context.coordinator.view = nsView
+    }
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.stop()
+    }
+
+    final class Coordinator {
+        var onEscape: () -> Void
+        weak var view: NSView?
+        private var monitor: Any?
+
+        init(onEscape: @escaping () -> Void) {
+            self.onEscape = onEscape
+        }
+
+        deinit {
+            stop()
+        }
+
+        func start() {
+            guard monitor == nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard
+                    let self,
+                    self.view?.window?.isKeyWindow == true,
+                    event.keyCode == 53
+                else {
+                    return event
+                }
+
+                self.onEscape()
+                return nil
+            }
+        }
+
+        func stop() {
+            if let monitor {
+                NSEvent.removeMonitor(monitor)
+                self.monitor = nil
+            }
+        }
+    }
 }
 
 private struct SettingsPage<Content: View>: View {
@@ -93,22 +296,29 @@ private struct SettingsPage<Content: View>: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: SettingsLayout.pageSpacing) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(title)
-                    .font(.title2.bold())
+        ScrollView {
+            VStack(alignment: .leading, spacing: SettingsLayout.pageSpacing) {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(title)
+                        .font(.system(size: 28, weight: .bold))
 
-                if let subtitle {
-                    Text(subtitle)
-                        .foregroundStyle(.secondary)
+                    if let subtitle {
+                        Text(subtitle)
+                            .font(.title3)
+                            .foregroundStyle(.secondary)
+                    }
                 }
-            }
 
-            content
-            Spacer(minLength: 0)
+                content
+            }
+            .frame(maxWidth: SettingsLayout.contentMaxWidth, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .top)
+            .padding(.horizontal, SettingsLayout.pageHorizontalPadding)
+            .padding(.top, SettingsLayout.pageTopPadding)
+            .padding(.bottom, SettingsLayout.pageBottomPadding)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(SettingsLayout.pagePadding)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(SettingsTheme.contentBackground)
     }
 }
 
@@ -133,21 +343,98 @@ private struct SettingsSection<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: SettingsLayout.sectionSpacing) {
             SettingsSectionTitle(text: title)
-            content
-                .padding(.leading, SettingsLayout.subordinateIndent)
+            SettingsCard {
+                content
+            }
         }
+    }
+}
+
+private struct SettingsCard<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: SettingsLayout.rowSpacing) {
+            content
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(SettingsTheme.cardBackground, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(SettingsTheme.cardStroke, lineWidth: 1)
+        )
+    }
+}
+
+private struct SettingsDivider: View {
+    var body: some View {
+        Divider()
+            .padding(.leading, 16)
+            .overlay(SettingsTheme.rowDivider)
+    }
+}
+
+private struct SettingsRow<Action: View>: View {
+    let title: String
+    let description: String?
+    @ViewBuilder let action: Action
+
+    init(title: String, description: String? = nil, @ViewBuilder action: () -> Action) {
+        self.title = title
+        self.description = description
+        self.action = action()
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 16) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(title)
+                    .font(.callout)
+
+                if let description {
+                    Text(description)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Spacer(minLength: 16)
+
+            action
+                .fixedSize()
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
 private struct SettingsToggleRow: View {
     let title: String
+    let description: String?
     @Binding var isOn: Bool
     var onChange: ((Bool, Bool) -> Void)? = nil
 
+    init(
+        title: String,
+        description: String? = nil,
+        isOn: Binding<Bool>,
+        onChange: ((Bool, Bool) -> Void)? = nil
+    ) {
+        self.title = title
+        self.description = description
+        self._isOn = isOn
+        self.onChange = onChange
+    }
+
     var body: some View {
-        HStack(spacing: 12) {
-            Text(title)
-            Spacer(minLength: 0)
+        SettingsRow(title: title, description: description) {
             Toggle("", isOn: $isOn)
                 .labelsHidden()
         }
@@ -155,6 +442,62 @@ private struct SettingsToggleRow: View {
         .onChange(of: isOn) { oldValue, newValue in
             onChange?(oldValue, newValue)
         }
+    }
+}
+
+private struct SettingsTextBlock: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct SecondaryHoverLink: View {
+    let title: String
+    let url: URL
+    @State private var isHovered = false
+
+    var body: some View {
+        Button {
+            NSWorkspace.shared.open(url)
+        } label: {
+            Text(title)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .underline(isHovered, color: .secondary)
+        }
+        .buttonStyle(.plain)
+        .contentShape(.rect)
+        .onHover { isHovered = $0 }
+    }
+}
+
+private struct SecondaryHoverButton<Label: View>: View {
+    let action: () -> Void
+    @ViewBuilder let label: (Bool) -> Label
+    @State private var isHovered = false
+
+    init(action: @escaping () -> Void, @ViewBuilder label: @escaping (Bool) -> Label) {
+        self.action = action
+        self.label = label
+    }
+
+    var body: some View {
+        Button(action: action) {
+            label(isHovered)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.plain)
+        .contentShape(.rect)
+        .onHover { isHovered = $0 }
     }
 }
 
@@ -173,6 +516,7 @@ struct UpdateSettingsView: View {
                 SettingsSection(title: "Preferences") {
                     SettingsToggleRow(
                         title: "Automatically check for app updates",
+                        description: "Sparkle will look for new meloDL releases in the background.",
                         isOn: $automaticallyChecks
                     ) { _, newValue in
                         updater.automaticallyChecksForUpdates = newValue
@@ -180,10 +524,15 @@ struct UpdateSettingsView: View {
                 }
 
                 SettingsSection(title: "Manual Check") {
-                    Button("Check for Updates...") {
-                        updater.checkForUpdates()
+                    SettingsRow(
+                        title: "Check for Updates",
+                        description: "Ask Sparkle to check for a new meloDL release now."
+                    ) {
+                        Button("Check...") {
+                            updater.checkForUpdates()
+                        }
+                        .disabled(!updater.canCheckForUpdates)
                     }
-                    .disabled(!updater.canCheckForUpdates)
                 }
             }
         }
@@ -200,7 +549,10 @@ struct DebugSettingsView: View {
         SettingsPage(title: "Debug", subtitle: "Development-only tools for app state.") {
             VStack(alignment: .leading, spacing: SettingsLayout.pageSpacing) {
                 SettingsSection(title: "Onboarding") {
-                    VStack(alignment: .leading, spacing: SettingsLayout.rowSpacing) {
+                    SettingsRow(
+                        title: "Replay Onboarding",
+                        description: "Marks onboarding as incomplete and opens the first-run flow again."
+                    ) {
                         Button {
                             onReplayOnboarding()
                             openWindow(id: AppWindowID.main)
@@ -209,13 +561,13 @@ struct DebugSettingsView: View {
                             Label("Replay Onboarding", systemImage: "arrow.clockwise")
                         }
                         .buttonStyle(.borderedProminent)
-
-                        Text("Marks onboarding as incomplete and opens the main window so the first-run flow can be tested again.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-
-                        Text(appSettings.onboardingCompleted ? "Current state: completed" : "Current state: onboarding visible")
-                            .font(.caption)
+                    }
+                    SettingsDivider()
+                    SettingsRow(
+                        title: "Current state",
+                        description: "Shows whether onboarding is currently complete."
+                    ) {
+                        Text(appSettings.onboardingCompleted ? "Completed" : "Visible")
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -226,7 +578,9 @@ struct DebugSettingsView: View {
     private func focusMainWindow() {
         DispatchQueue.main.async {
             NSApplication.shared.activate(ignoringOtherApps: true)
-            NSApplication.shared.windows.first(where: { $0.level == .normal })?.makeKeyAndOrderFront(nil)
+            NSApplication.shared.windows.first {
+                $0.level == .normal && $0.canBecomeKey && !$0.isMiniaturized
+            }?.makeKeyAndOrderFront(nil)
         }
     }
 }
@@ -240,58 +594,72 @@ struct DownloadsSettingsView: View {
         SettingsPage(title: "Downloads", subtitle: "Default behavior for new download batches.") {
             VStack(alignment: .leading, spacing: SettingsLayout.pageSpacing) {
                 SettingsSection(title: "Download Folder") {
-                    FolderSelectionView(fileService: fileService, isDisabled: false) { folder in
-                        if let folder {
-                            appSettings.downloadFolderPath = folder.path
+                    SettingsRow(
+                        title: "Folder",
+                        description: appSettings.downloadFolderPath
+                    ) {
+                        Button("Choose Folder") {
+                            fileService.selectFolder()
                         }
                     }
                 }
 
                 SettingsSection(title: "Audio Defaults") {
-                    VStack(alignment: .leading, spacing: SettingsLayout.rowSpacing) {
-                        HStack(spacing: 12) {
-                            Text("Quality")
-                                .frame(width: 60, alignment: .leading)
-                            Picker("Quality", selection: $appSettings.quality) {
-                                ForEach(AudioQuality.allCases, id: \.self) { quality in
-                                    Text(quality.displayName).tag(quality)
-                                }
+                    SettingsRow(
+                        title: "Quality",
+                        description: "Default audio quality for converted downloads."
+                    ) {
+                        Picker("Quality", selection: $appSettings.quality) {
+                            ForEach(AudioQuality.allCases, id: \.self) { quality in
+                                Text(quality.displayName).tag(quality)
                             }
-                            .labelsHidden()
-                            .pickerStyle(.segmented)
                         }
-
-                        SettingsToggleRow(
-                            title: "Embed metadata",
-                            isOn: $appSettings.embedMetadata
-                        )
-
-                        if appSettings.format.supportsThumbnailEmbed {
-                            SettingsToggleRow(
-                                title: "Embed thumbnail",
-                                isOn: $appSettings.embedThumbnail
-                            )
-                        } else {
-                            Text("Thumbnail embed is only available for MP3, M4A, and FLAC formats.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
                     }
+
+                    SettingsDivider()
+
+                    SettingsToggleRow(
+                        title: "Embed metadata",
+                        description: "Write title, artist, album, and other metadata into downloaded files.",
+                        isOn: $appSettings.embedMetadata
+                    )
+
+                    SettingsDivider()
+
+                    SettingsToggleRow(
+                        title: "Embed thumbnail",
+                        description: appSettings.format.supportsThumbnailEmbed
+                            ? "Add artwork to supported audio formats."
+                            : "Only available for MP3, M4A, and FLAC formats.",
+                        isOn: $appSettings.embedThumbnail
+                    )
+                    .disabled(!appSettings.format.supportsThumbnailEmbed)
                 }
 
                 SettingsSection(title: "Batch Behavior") {
-                    VStack(alignment: .leading, spacing: SettingsLayout.rowSpacing) {
-                        SettingsToggleRow(
-                            title: "Fast downloads",
-                            isOn: $appSettings.fastDownloads
-                        )
-                    }
+                    SettingsToggleRow(
+                        title: "Fast downloads",
+                        description: "Run eligible download work with faster defaults.",
+                        isOn: $appSettings.fastDownloads
+                    )
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .onAppear {
             fileService.selectedFolder = appSettings.downloadFolderURL
+        }
+        .fileImporter(
+            isPresented: $fileService.showingFolderPicker,
+            allowedContentTypes: [.folder],
+            allowsMultipleSelection: false
+        ) { result in
+            _ = fileService.handleFolderSelection(result: result)
+            if let folder = fileService.selectedFolder {
+                appSettings.downloadFolderPath = folder.path
+            }
         }
     }
 }
@@ -302,60 +670,59 @@ struct BehaviorSettingsView: View {
 
     var body: some View {
         SettingsPage(title: "Behavior", subtitle: "App and post-download actions.") {
-            ScrollView {
-                VStack(alignment: .leading, spacing: SettingsLayout.pageSpacing) {
-                    SettingsSection(title: "After Download") {
-                        VStack(alignment: .leading, spacing: SettingsLayout.rowSpacing) {
-                            SettingsToggleRow(
-                                title: "Open download folder after successful batch",
-                                isOn: $appSettings.openFolderOnSuccess
-                            )
-                            SettingsToggleRow(
-                                title: "Show notification when download finishes",
-                                isOn: $appSettings.notifyOnDownloadCompletion
-                            )
-                        }
-                    }
+            VStack(alignment: .leading, spacing: SettingsLayout.pageSpacing) {
+                SettingsSection(title: "After Download") {
+                    SettingsToggleRow(
+                        title: "Open download folder",
+                        description: "Reveal the download folder after a successful batch.",
+                        isOn: $appSettings.openFolderOnSuccess
+                    )
 
-                    SettingsSection(title: "Duplicate Review") {
-                        VStack(alignment: .leading, spacing: SettingsLayout.rowSpacing) {
-                            SettingsToggleRow(
-                                title: "Show duplicate review gesture tip",
-                                isOn: $appSettings.showDuplicateReviewGestureTip
-                            )
-                        }
-                    }
+                    SettingsDivider()
 
-                    SettingsSection(title: "App Mode") {
-                        VStack(alignment: .leading, spacing: SettingsLayout.rowSpacing) {
-                            SettingsToggleRow(
-                                title: "Use menubar-only mode",
-                                isOn: $appSettings.menubarOnlyMode
-                            ) { _, newValue in
-                                if !newValue, appSettings.openAtLogin {
-                                    appSettings.openAtLogin = false
-                                    LoginItemService.setEnabled(false)
-                                }
-                                showRestartPrompt = true
-                            }
-                            SettingsToggleRow(
-                                title: "Open meloDL at login",
-                                isOn: $appSettings.openAtLogin
-                            ) { _, newValue in
-                                LoginItemService.setEnabled(newValue)
-                            }
-                            .disabled(!appSettings.menubarOnlyMode)
-
-                            if !appSettings.menubarOnlyMode {
-                                Text("Available only when menubar-only mode is enabled.")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    }
+                    SettingsToggleRow(
+                        title: "Show notification",
+                        description: "Post a macOS notification when a download finishes.",
+                        isOn: $appSettings.notifyOnDownloadCompletion
+                    )
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+
+                SettingsSection(title: "Duplicate Review") {
+                    SettingsToggleRow(
+                        title: "Show gesture tip",
+                        description: "Show the swipe gesture hint in duplicate review.",
+                        isOn: $appSettings.showDuplicateReviewGestureTip
+                    )
+                }
+
+                SettingsSection(title: "App Mode") {
+                    SettingsToggleRow(
+                        title: "Menu bar only",
+                        description: "Run meloDL from the menu bar instead of the Dock.",
+                        isOn: $appSettings.menubarOnlyMode
+                    ) { _, newValue in
+                        if !newValue, appSettings.openAtLogin {
+                            appSettings.openAtLogin = false
+                            LoginItemService.setEnabled(false)
+                        }
+                        showRestartPrompt = true
+                    }
+
+                    SettingsDivider()
+
+                    SettingsToggleRow(
+                        title: "Open at login",
+                        description: appSettings.menubarOnlyMode
+                            ? "Start meloDL automatically when you sign in."
+                            : "Available only when menu bar only mode is enabled.",
+                        isOn: $appSettings.openAtLogin
+                    ) { _, newValue in
+                        LoginItemService.setEnabled(newValue)
+                    }
+                    .disabled(!appSettings.menubarOnlyMode)
+                }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .alert("Restart Required", isPresented: $showRestartPrompt) {
             Button("Later", role: .cancel) {}
@@ -380,59 +747,97 @@ struct IndexingSettingsView: View {
 
     var body: some View {
         SettingsPage(title: "Indexing", subtitle: "Configure duplicate detection indexing roots and maintenance.") {
-            ScrollView {
-                VStack(alignment: .leading, spacing: SettingsLayout.pageSpacing) {
+            VStack(alignment: .leading, spacing: SettingsLayout.pageSpacing) {
                     SettingsSection(title: "Duplicate Detection") {
-                        VStack(alignment: .leading, spacing: SettingsLayout.rowSpacing) {
-                            SettingsToggleRow(
-                                title: "Enable duplicate detection before download",
-                                isOn: $appSettings.duplicateDetectionEnabled
-                            )
+                        SettingsToggleRow(
+                            title: "Duplicate detection",
+                            description: "Check indexed folders before downloading a matching track.",
+                            isOn: $appSettings.duplicateDetectionEnabled
+                        )
 
+                        SettingsDivider()
+
+                        SettingsRow(
+                            title: "Library duplicate scan",
+                            description: "Shows exact duplicate files grouped by content hash and full path."
+                        ) {
                             Button("Scan Library for Duplicates") {
                                 viewModel.openExactDuplicateFinder()
                             }
                             .disabled(viewModel.roots.isEmpty || viewModel.isIndexing)
-
-                            Text("Shows exact duplicate files grouped by content hash and full path.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
                         }
                     }
 
-                    SettingsSection(title: "Index Status") {
-                        VStack(alignment: .leading, spacing: SettingsLayout.rowSpacing) {
-                            HStack(spacing: 8) {
-                                if viewModel.isIndexing {
-                                    ProgressView()
-                                        .controlSize(.small)
-                                    Text("Indexing...")
-                                } else {
-                                    Image(systemName: "checkmark.circle")
+                    VStack(alignment: .leading, spacing: SettingsLayout.sectionSpacing) {
+                        HStack(alignment: .center) {
+                            SettingsSectionTitle(text: "Indexed Folders")
+
+                            Spacer(minLength: 0)
+
+                            indexedFolderControls
+                        }
+
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 0) {
+                                if viewModel.roots.isEmpty {
+                                    Text("No indexed folders yet")
                                         .foregroundStyle(.secondary)
-                                    Text("Idle")
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 8)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                } else {
+                                    ForEach(Array(viewModel.roots.enumerated()), id: \.element) { index, root in
+                                        indexedFolderRow(root: root, index: index)
+                                    }
                                 }
                             }
+                            .frame(maxWidth: .infinity, alignment: .topLeading)
+                        }
+                        .frame(minHeight: 130, maxHeight: 170)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(Color(.windowBackgroundColor).opacity(0.28))
+                        )
+                        .onDrop(
+                            of: [UTType.fileURL.identifier],
+                            isTargeted: $dropTargeted,
+                            perform: handleDrop(providers:)
+                        )
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(
+                                    dropTargeted ? Color.accentColor : Color.secondary.opacity(0.2),
+                                    lineWidth: 1
+                                )
+                        }
 
-                            Text(lastIndexedText)
-                                .foregroundStyle(.secondary)
-                            Text("Indexed tracks: \(viewModel.indexedTrackCount)")
-                                .foregroundStyle(.secondary)
-                            Text("DB (data): \(formatBytes(viewModel.databaseSizeMainBytes))")
-                                .foregroundStyle(.secondary)
-                            Text("DB (WAL buffer): \(formatBytes(viewModel.databaseSizeWalBytes))")
-                                .foregroundStyle(.secondary)
-                            Text("DB (shared memory): \(formatBytes(viewModel.databaseSizeShmBytes))")
-                                .foregroundStyle(.secondary)
-                            Text("DB (total): \(formatBytes(viewModel.databaseSizeTotalBytes))")
-                                .foregroundStyle(.secondary)
+                        Text("Tip: Drag and drop folders into this list to add them.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 2)
+                    }
 
-                            if !viewModel.inaccessibleRoots.isEmpty {
-                                Text("Some indexed folders are currently inaccessible.")
-                                    .foregroundStyle(.orange)
+                    SettingsSection(title: "Index Status") {
+                        SettingsRow(
+                            title: viewModel.isIndexing ? "Indexing..." : "Idle",
+                            description: indexStatusDescription
+                        ) {
+                            if viewModel.isIndexing {
+                                ProgressView()
+                                    .controlSize(.small)
+                            } else {
+                                Image(systemName: "checkmark.circle")
+                                    .foregroundStyle(.secondary)
                             }
+                        }
 
-                            HStack(spacing: 10) {
+                        SettingsDivider()
+
+                        SettingsRow(
+                            title: "Maintenance",
+                            description: "Update the index or clear cached indexing data."
+                        ) {
+                            HStack(spacing: 8) {
                                 Button("Update index now") {
                                     viewModel.updateIndexNow()
                                 }
@@ -444,89 +849,6 @@ struct IndexingSettingsView: View {
                                 .disabled(viewModel.isIndexing)
                             }
                         }
-                        .font(.caption)
-                    }
-
-                    SettingsSection(title: "Indexed Folders") {
-                        VStack(alignment: .leading, spacing: SettingsLayout.rowSpacing) {
-                            List(selection: $viewModel.selectedRoot) {
-                                if viewModel.roots.isEmpty {
-                                    Text("No indexed folders yet")
-                                        .foregroundStyle(.secondary)
-                                        .listRowBackground(Color(.controlBackgroundColor).opacity(0.45))
-                                } else {
-                                    ForEach(Array(viewModel.roots.enumerated()), id: \.element) { index, root in
-                                        Text(root)
-                                            .tag(root)
-                                            .listRowBackground(
-                                                (index % 2 == 0
-                                                    ? Color(.controlBackgroundColor).opacity(0.55)
-                                                    : Color(.controlBackgroundColor).opacity(0.35))
-                                            )
-                                    }
-                                }
-                            }
-                            .frame(minHeight: 130, maxHeight: 170)
-                            .scrollContentBackground(.hidden)
-                            .listStyle(.plain)
-                            .background(
-                                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .fill(Color(.windowBackgroundColor).opacity(0.28))
-                            )
-                            .onDrop(
-                                of: [UTType.fileURL.identifier],
-                                isTargeted: $dropTargeted,
-                                perform: handleDrop(providers:)
-                            )
-                            .overlay {
-                                RoundedRectangle(cornerRadius: 8)
-                                    .stroke(
-                                        dropTargeted ? Color.accentColor : Color.secondary.opacity(0.2),
-                                        lineWidth: 1
-                                    )
-                            }
-
-                            HStack(alignment: .center) {
-                                HStack(spacing: 0) {
-                                    Button {
-                                        viewModel.removeSelectedRoot()
-                                    } label: {
-                                        Image(systemName: "minus")
-                                            .frame(width: 18, height: 18)
-                                    }
-                                    .disabled(viewModel.selectedRoot == nil || viewModel.isIndexing)
-                                    .buttonStyle(.plain)
-                                    .frame(width: 28, height: 24)
-
-                                    Divider()
-                                        .frame(height: 16)
-
-                                    Button {
-                                        viewModel.addRootUsingPanel()
-                                    } label: {
-                                        Image(systemName: "plus")
-                                            .frame(width: 18, height: 18)
-                                    }
-                                    .disabled(viewModel.isIndexing)
-                                    .buttonStyle(.plain)
-                                    .frame(width: 28, height: 24)
-                                }
-                                .background(
-                                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                        .fill(Color(.controlBackgroundColor))
-                                )
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                        .stroke(Color.secondary.opacity(0.25), lineWidth: 1)
-                                )
-
-                                Spacer(minLength: 0)
-
-                                Text("Tip: Drag and drop folders into this list to add them.")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
                     }
 
                     if let feedbackMessage = viewModel.feedbackMessage {
@@ -534,9 +856,8 @@ struct IndexingSettingsView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .onAppear { viewModel.onAppear() }
         .onDisappear { viewModel.onDisappear() }
@@ -601,11 +922,88 @@ struct IndexingSettingsView: View {
         }
     }
 
+    private func indexedFolderRow(root: String, index: Int) -> some View {
+        Button {
+            viewModel.selectedRoot = root
+        } label: {
+            Text(root)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .background(indexedFolderRowBackground(root: root, index: index))
+    }
+
+    private func indexedFolderRowBackground(root: String, index: Int) -> Color {
+        if viewModel.selectedRoot == root {
+            return Color.accentColor.opacity(0.62)
+        }
+
+        return index % 2 == 0
+            ? Color(.controlBackgroundColor).opacity(0.55)
+            : Color(.controlBackgroundColor).opacity(0.35)
+    }
+
+    private var indexedFolderControls: some View {
+        let selectedRoot = viewModel.selectedRoot
+
+        return HStack(spacing: 0) {
+            Button {
+                if let selectedRoot {
+                    viewModel.removeRoot(selectedRoot)
+                }
+            } label: {
+                Image(systemName: "minus")
+                    .frame(width: 18, height: 18)
+            }
+            .disabled(selectedRoot == nil || viewModel.isIndexing)
+            .buttonStyle(.plain)
+            .frame(width: 28, height: 24)
+
+            Divider()
+                .frame(height: 16)
+
+            Button {
+                viewModel.addRootUsingPanel()
+            } label: {
+                Image(systemName: "plus")
+                    .frame(width: 18, height: 18)
+            }
+            .disabled(viewModel.isIndexing)
+            .buttonStyle(.plain)
+            .frame(width: 28, height: 24)
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(Color(.controlBackgroundColor))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .stroke(Color.secondary.opacity(0.25), lineWidth: 1)
+        )
+    }
+
     private var lastIndexedText: String {
         if let lastIndexedAt = viewModel.lastIndexedAt {
             return "Last indexed: \(lastIndexedAt.formatted(date: .abbreviated, time: .shortened))"
         }
         return "Last indexed: never"
+    }
+
+    private var indexStatusDescription: String {
+        var parts = [
+            lastIndexedText,
+            "Indexed tracks: \(viewModel.indexedTrackCount)",
+            "Database: \(formatBytes(viewModel.databaseSizeTotalBytes))"
+        ]
+        if !viewModel.inaccessibleRoots.isEmpty {
+            parts.append("Some indexed folders are inaccessible.")
+        }
+        return parts.joined(separator: "\n")
     }
 
     private func formatBytes(_ bytes: Int64) -> String {
@@ -1137,35 +1535,24 @@ struct AboutSettingsView: View {
         SettingsPage(title: "About", subtitle: "A focused desktop app for quick audio downloads.") {
             VStack(alignment: .leading, spacing: SettingsLayout.pageSpacing) {
                 SettingsSection(title: "meloDL") {
-                    Text("meloDL is a lightweight macOS app for downloading and converting audio with a simple, settings-first workflow.")
-                        .font(.body)
+                    SettingsTextBlock(text: "meloDL is a lightweight macOS app for downloading and converting audio with a simple, settings-first workflow.")
                 }
 
                 SettingsSection(title: "Details") {
-                    VStack(alignment: .leading, spacing: SettingsLayout.rowSpacing) {
-                        HStack(spacing: 0) {
-                            Text("Built and maintained by ")
-                                .foregroundStyle(.secondary)
-                            Link("Alexandru Apavaloaiei", destination: URL(string: "https://apvl.dev")!)
-                                .foregroundStyle(.blue)
-                        }
-                        .font(.body)
+                    SettingsRow(title: "Maintainer", description: "Built and maintained by Alexandru Apavaloaiei.") {
+                        SecondaryHoverLink(title: "apvl.dev", url: URL(string: "https://apvl.dev")!)
+                    }
 
-                        HStack(spacing: 0) {
-                            Text("Official website: ")
-                                .foregroundStyle(.secondary)
-                            Link("apvl.dev/stuff/meloDL", destination: URL(string: "https://apvl.dev/stuff/meloDL")!)
-                                .foregroundStyle(.blue)
-                        }
-                        .font(.body)
+                    SettingsDivider()
 
-                        HStack(spacing: 0) {
-                            Text("Supported links: ")
-                                .foregroundStyle(.secondary)
-                            Link("yt-dlp supported sites", destination: URL(string: "https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md")!)
-                                .foregroundStyle(.blue)
-                        }
-                        .font(.body)
+                    SettingsRow(title: "Official website", description: "Product page and release information.") {
+                        SecondaryHoverLink(title: "apvl.dev/stuff/meloDL", url: URL(string: "https://apvl.dev/stuff/meloDL")!)
+                    }
+
+                    SettingsDivider()
+
+                    SettingsRow(title: "Supported links", description: "Sites supported by the download backend.") {
+                        SecondaryHoverLink(title: "yt-dlp sites", url: URL(string: "https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md")!)
                     }
                 }
             }
@@ -1178,18 +1565,25 @@ struct CreditsSettingsView: View {
         SettingsPage(title: "Credits", subtitle: "People and tools that made meloDL possible.") {
             VStack(alignment: .leading, spacing: SettingsLayout.pageSpacing) {
                 SettingsSection(title: "Open Source") {
-                    VStack(alignment: .leading, spacing: SettingsLayout.rowSpacing) {
-                        Link("yt-dlp", destination: URL(string: "https://github.com/yt-dlp/yt-dlp")!)
-                        Link("ffmpeg", destination: URL(string: "https://github.com/FFmpeg/FFmpeg")!)
-                        Link("ffprobe", destination: URL(string: "https://ffmpeg.org/ffprobe.html")!)
+                    SettingsRow(title: "yt-dlp", description: "Download engine for supported media sites.") {
+                        SecondaryHoverLink(title: "Open", url: URL(string: "https://github.com/yt-dlp/yt-dlp")!)
                     }
-                    .font(.body)
+
+                    SettingsDivider()
+
+                    SettingsRow(title: "ffmpeg", description: "Audio conversion and processing toolkit.") {
+                        SecondaryHoverLink(title: "Open", url: URL(string: "https://github.com/FFmpeg/FFmpeg")!)
+                    }
+
+                    SettingsDivider()
+
+                    SettingsRow(title: "ffprobe", description: "Media metadata inspection utility.") {
+                        SecondaryHoverLink(title: "Open", url: URL(string: "https://ffmpeg.org/ffprobe.html")!)
+                    }
                 }
 
                 SettingsSection(title: "License") {
-                    Text("meloDL is released under the MIT License.")
-                        .font(.body)
-                        .foregroundStyle(.secondary)
+                    SettingsTextBlock(text: "meloDL is released under the MIT License.")
                 }
             }
         }
@@ -1200,42 +1594,24 @@ struct SupportSettingsView: View {
     var body: some View {
         SettingsPage(title: "Support", subtitle: "Get help, report issues, and contact the team.") {
             SettingsSection(title: "Contact") {
-                VStack(alignment: .leading, spacing: SettingsLayout.rowSpacing) {
-                    HStack(spacing: 6) {
-                        Text("Email:")
-                            .font(.body)
-                            .foregroundStyle(.secondary)
-
-                        Button {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString("alex@apvl.dev", forType: .string)
-                        } label: {
-                            HStack(spacing: 4) {
-                                Text(verbatim: "alex@apvl.dev")
-                                Image(systemName: "doc.on.doc")
-                            }
-                            .font(.body)
-                            .foregroundStyle(.secondary)
-                        }
-                        .buttonStyle(.plain)
-                        .contentShape(.rect)
-                        .help("Copy email address")
-                        .onHover { isHovering in
-                            if isHovering {
-                                NSCursor.pointingHand.push()
-                            } else {
-                                NSCursor.pop()
-                            }
+                SettingsRow(title: "Email", description: "Copy the support email address.") {
+                    SecondaryHoverButton {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString("alex@apvl.dev", forType: .string)
+                    } label: { isHovered in
+                        HStack(spacing: 4) {
+                            Text(verbatim: "alex@apvl.dev")
+                                .underline(isHovered, color: .secondary)
+                            Image(systemName: "doc.on.doc")
                         }
                     }
+                    .help("Copy email address")
+                }
 
-                    HStack(spacing: 6) {
-                        Text("GitHub Issues:")
-                            .font(.body)
-                            .foregroundStyle(.secondary)
-                        Link("github.com/alexapvl/meloDL/issues", destination: URL(string: "https://github.com/alexapvl/meloDL/issues")!)
-                            .font(.body)
-                    }
+                SettingsDivider()
+
+                SettingsRow(title: "GitHub Issues", description: "Report bugs or request changes.") {
+                    SecondaryHoverLink(title: "Open issues", url: URL(string: "https://github.com/alexapvl/meloDL/issues")!)
                 }
             }
         }

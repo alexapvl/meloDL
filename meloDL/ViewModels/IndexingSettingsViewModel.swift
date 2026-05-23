@@ -99,7 +99,11 @@ final class IndexingSettingsViewModel: ObservableObject {
 
     func removeSelectedRoot() {
         guard let currentSelection = selectedRoot else { return }
-        let newRoots = roots.filter { $0 != currentSelection }
+        removeRoot(currentSelection)
+    }
+
+    func removeRoot(_ root: String) {
+        let newRoots = roots.filter { $0 != root }
         selectedRoot = nil
         updateRoots(newRoots, triggerSmartSync: true)
     }

@@ -24,6 +24,8 @@ struct meloDLApp: App {
     @StateObject private var appSettings = AppSettings()
     @State private var menuBarController: MenuBarController?
     @State private var didTriggerLaunchReindex = false
+    @State private var isShowingSettings = false
+    @Environment(\.openWindow) private var openWindow
     private let notificationDelegate = DownloadNotificationCenterDelegate()
     private let launchMenubarOnlyMode: Bool
     private let updaterController = SPUStandardUpdaterController(
@@ -62,12 +64,28 @@ struct meloDLApp: App {
 
     var body: some Scene {
         mainWindowScene
-        settingsScene
     }
 
     private var mainWindowScene: some Scene {
         WindowGroup(id: AppWindowID.main) {
-            if launchMenubarOnlyMode && appSettings.onboardingCompleted {
+            if appSettings.onboardingCompleted && isShowingSettings {
+                #if DEBUG
+                SettingsView(
+                    updater: updaterController.updater,
+                    appSettings: appSettings,
+                    onDismiss: closeSettingsPage,
+                    onReplayOnboarding: replayOnboarding
+                )
+                .disableFocusRings()
+                #else
+                SettingsView(
+                    updater: updaterController.updater,
+                    appSettings: appSettings,
+                    onDismiss: closeSettingsPage
+                )
+                .disableFocusRings()
+                #endif
+            } else if launchMenubarOnlyMode && appSettings.onboardingCompleted {
                 Color.clear
                     .frame(width: 0, height: 0)
                     .onAppear {
@@ -84,7 +102,8 @@ struct meloDLApp: App {
                     if appSettings.onboardingCompleted {
                         ContentView(
                             appSettings: appSettings,
-                            onCheckAppUpdates: checkForAppUpdates
+                            onCheckAppUpdates: checkForAppUpdates,
+                            onOpenSettings: showSettingsPage
                         )
                     } else {
                         OnboardingView(
@@ -103,6 +122,7 @@ struct meloDLApp: App {
                 .disableFocusRings()
             }
         }
+        .windowStyle(.hiddenTitleBar)
         .commands {
             CommandGroup(replacing: .newItem) {
                 // Intentionally empty to disable Command-N new window.
@@ -111,25 +131,11 @@ struct meloDLApp: App {
             CommandGroup(after: .appInfo) {
                 Button("Check for Updates...", action: checkForAllUpdates)
             }
-        }
-    }
 
-    private var settingsScene: some Scene {
-        Settings {
-            #if DEBUG
-            SettingsView(
-                updater: updaterController.updater,
-                appSettings: appSettings,
-                onReplayOnboarding: replayOnboarding
-            )
-            .disableFocusRings()
-            #else
-            SettingsView(
-                updater: updaterController.updater,
-                appSettings: appSettings
-            )
-            .disableFocusRings()
-            #endif
+            CommandGroup(replacing: .appSettings) {
+                Button("Settings...", action: showSettingsPage)
+                    .keyboardShortcut(",", modifiers: .command)
+            }
         }
     }
 
@@ -148,6 +154,7 @@ struct meloDLApp: App {
     #if DEBUG
     private func replayOnboarding() {
         appSettings.onboardingCompleted = false
+        isShowingSettings = false
         AppModeController.applyMenubarOnlyMode(false)
         DispatchQueue.main.async {
             NSApplication.shared.activate(ignoringOtherApps: true)
@@ -155,14 +162,49 @@ struct meloDLApp: App {
     }
     #endif
 
-    private func focusMainWindowIfNeeded() {
-        guard !launchMenubarOnlyMode else { return }
+    private func showSettingsPage() {
+        isShowingSettings = true
+
+        if launchMenubarOnlyMode {
+            AppModeController.applyMenubarOnlyMode(false)
+        }
+
+        if mainAppWindow() == nil {
+            openWindow(id: AppWindowID.main)
+        }
+
+        if launchMenubarOnlyMode {
+            focusMainWindowIfNeeded(allowMenubarLaunch: true)
+        }
+    }
+
+    private func closeSettingsPage() {
+        isShowingSettings = false
+
+        if launchMenubarOnlyMode && appSettings.onboardingCompleted {
+            DispatchQueue.main.async {
+                for window in NSApplication.shared.windows where window.level == .normal {
+                    window.close()
+                }
+                AppModeController.applyMenubarOnlyMode(true)
+            }
+        }
+    }
+
+    private func focusMainWindowIfNeeded(allowMenubarLaunch: Bool = false) {
+        guard allowMenubarLaunch || !launchMenubarOnlyMode else { return }
 
         // Window creation races app activation during relaunch from accessory mode.
         // Focus once immediately and once shortly after to catch late window creation.
         DispatchQueue.main.async {
             NSApplication.shared.activate(ignoringOtherApps: true)
-            NSApplication.shared.windows.first(where: { $0.level == .normal })?.makeKeyAndOrderFront(nil)
+            mainAppWindow()?.makeKeyAndOrderFront(nil)
+        }
+    }
+
+    private func mainAppWindow() -> NSWindow? {
+        NSApplication.shared.windows.first {
+            $0.level == .normal && $0.canBecomeKey && !$0.isMiniaturized
         }
     }
 
@@ -183,6 +225,7 @@ struct meloDLApp: App {
         menuBarController = MenuBarController(
             appSettings: appSettings,
             onCheckAllUpdates: checkForAllUpdates,
+            onOpenSettings: showSettingsPage,
             onSwitchToDockMode: switchToDockMode,
             onQuit: quitApp
         )
@@ -217,9 +260,9 @@ private final class DownloadNotificationCenterDelegate: NSObject, UNUserNotifica
 
 private enum AppModeController {
     static func applyMenubarOnlyMode(_ enabled: Bool) {
-        if !enabled {
-            // LSUIElement = YES starts the app as .accessory (no Dock icon).
-            // For window mode, upgrade to .regular so Dock icon and app menu appear.
+        if enabled {
+            NSApplication.shared.setActivationPolicy(.accessory)
+        } else {
             NSApplication.shared.setActivationPolicy(.regular)
             NSApplication.shared.activate(ignoringOtherApps: true)
         }
