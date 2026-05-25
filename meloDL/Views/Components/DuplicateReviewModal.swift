@@ -68,7 +68,7 @@ struct DuplicateReviewModal: View {
             }
             Spacer()
             Button("Cancel", role: .cancel, action: onCancel)
-                .buttonStyle(.bordered)
+                .meloBorderedButton()
                 .tint(.white.opacity(0.8))
         }
     }

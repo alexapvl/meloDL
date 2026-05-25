@@ -5,10 +5,11 @@ struct FormatPickerView: View {
     let isDisabled: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Format")
-                .font(.subheadline)
+        VStack(alignment: .leading, spacing: 8) {
+            Label("Format", systemImage: "music.note")
+                .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
+
             Picker("Format", selection: $format) {
                 ForEach(AudioFormat.allCases, id: \.self) { fmt in
                     Text(fmt.displayName).tag(fmt)
@@ -16,6 +17,7 @@ struct FormatPickerView: View {
             }
             .labelsHidden()
             .pickerStyle(.menu)
+            .controlSize(.large)
             .disabled(isDisabled)
         }
     }

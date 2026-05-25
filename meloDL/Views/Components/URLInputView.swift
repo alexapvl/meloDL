@@ -7,9 +7,10 @@ struct URLInputView: View {
     let onSubmitDownload: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text("URL:")
-                .font(.headline)
+        VStack(alignment: .leading, spacing: 8) {
+            Label("Source URL", systemImage: "link")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
 
             NoFocusRingTextField(
                 placeholder: "Paste any supported URL here",
@@ -17,9 +18,28 @@ struct URLInputView: View {
                 isDisabled: isDisabled,
                 onSubmit: onSubmitDownload
             )
-            .frame(height: 22)
-                .disabled(isDisabled)
+            .frame(height: 36)
+            .padding(.leading, 12)
+            .padding(.trailing, 34)
+            .overlay(alignment: .trailing) {
+                submitKeyHint
+                    .padding(.trailing, 8)
+            }
+            .background(Color(nsColor: .textBackgroundColor).opacity(0.5), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .stroke(Color.secondary.opacity(0.18), lineWidth: 1)
+            }
+            .disabled(isDisabled)
         }
+    }
+
+    private var submitKeyHint: some View {
+        Image(systemName: "return")
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary.opacity(0.8))
+        .opacity(url.isEmpty || isDisabled ? 0 : 1)
+        .accessibilityHidden(true)
     }
 }
 
@@ -36,9 +56,10 @@ private struct NoFocusRingTextField: NSViewRepresentable {
     func makeNSView(context: Context) -> NSTextField {
         let textField = NSTextField()
         textField.placeholderString = placeholder
-        textField.isBordered = true
-        textField.isBezeled = true
-        textField.bezelStyle = .roundedBezel
+        textField.isBordered = false
+        textField.isBezeled = false
+        textField.drawsBackground = false
+        textField.font = .systemFont(ofSize: 15, weight: .regular)
         textField.focusRingType = .none
         textField.delegate = context.coordinator
         textField.target = context.coordinator

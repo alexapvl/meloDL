@@ -214,11 +214,6 @@ final class IndexingSettingsViewModel: ObservableObject {
                 if isManualReviewMode {
                     refreshManualQueueFromCurrentGroups()
                 }
-                if groups.isEmpty {
-                    feedbackMessage = "No exact duplicate files found."
-                } else {
-                    feedbackMessage = "Found \(groups.count) duplicate group(s)."
-                }
             } catch {
                 exactDuplicateScanError = "Failed to scan duplicates: \(error.localizedDescription)"
             }

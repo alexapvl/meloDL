@@ -17,11 +17,21 @@ final class AppSettings: ObservableObject {
     @Published var fastDownloads: Bool {
         didSet { defaults.set(fastDownloads, forKey: Keys.fastDownloads) }
     }
+    @Published var maxParallelSessions: Int {
+        didSet {
+            let clamped = Self.clampParallelSessions(maxParallelSessions)
+            if maxParallelSessions != clamped {
+                maxParallelSessions = clamped
+                return
+            }
+            defaults.set(clamped, forKey: Keys.maxParallelSessions)
+        }
+    }
     @Published var openFolderOnSuccess: Bool {
         didSet { defaults.set(openFolderOnSuccess, forKey: Keys.openFolderOnSuccess) }
     }
-    @Published var notifyOnDownloadCompletion: Bool {
-        didSet { defaults.set(notifyOnDownloadCompletion, forKey: Keys.notifyOnDownloadCompletion) }
+    @Published var notifyOnSessionEvents: Bool {
+        didSet { defaults.set(notifyOnSessionEvents, forKey: Keys.notifyOnSessionEvents) }
     }
     @Published var menubarOnlyMode: Bool {
         didSet { defaults.set(menubarOnlyMode, forKey: Keys.menubarOnlyMode) }
@@ -80,16 +90,26 @@ final class AppSettings: ObservableObject {
             fastDownloads = true
         }
 
+        if defaults.object(forKey: Keys.maxParallelSessions) != nil {
+            maxParallelSessions = Self.clampParallelSessions(defaults.integer(forKey: Keys.maxParallelSessions))
+        } else {
+            maxParallelSessions = 3
+        }
+
         if defaults.object(forKey: Keys.openFolderOnSuccess) != nil {
             openFolderOnSuccess = defaults.bool(forKey: Keys.openFolderOnSuccess)
         } else {
             openFolderOnSuccess = false
         }
 
-        if defaults.object(forKey: Keys.notifyOnDownloadCompletion) != nil {
-            notifyOnDownloadCompletion = defaults.bool(forKey: Keys.notifyOnDownloadCompletion)
+        if defaults.object(forKey: Keys.notifyOnSessionEvents) != nil {
+            notifyOnSessionEvents = defaults.bool(forKey: Keys.notifyOnSessionEvents)
+        } else if defaults.object(forKey: Keys.notifyOnDownloadCompletion) != nil {
+            let migratedValue = defaults.bool(forKey: Keys.notifyOnDownloadCompletion)
+            notifyOnSessionEvents = migratedValue
+            defaults.set(migratedValue, forKey: Keys.notifyOnSessionEvents)
         } else {
-            notifyOnDownloadCompletion = true
+            notifyOnSessionEvents = true
         }
 
         if defaults.object(forKey: Keys.menubarOnlyMode) != nil {
@@ -159,15 +179,21 @@ final class AppSettings: ObservableObject {
         )
     }
 
+    static func clampParallelSessions(_ value: Int) -> Int {
+        min(max(value, 1), 10)
+    }
+
     private enum Keys {
         static let audioFormat = "settings.audioFormat"
         static let audioQuality = "settings.audioQuality"
         static let embedMetadata = "settings.embedMetadata"
         static let embedThumbnail = "settings.embedThumbnail"
         static let fastDownloads = "settings.fastDownloads"
+        static let maxParallelSessions = "settings.maxParallelSessions"
         static let downloadFolderPath = "settings.downloadFolderPath"
         static let openFolderOnSuccess = "settings.openFolderOnSuccess"
         static let notifyOnDownloadCompletion = "settings.notifyOnDownloadCompletion"
+        static let notifyOnSessionEvents = "settings.notifyOnSessionEvents"
         static let menubarOnlyMode = "settings.menubarOnlyMode"
         static let openAtLogin = "settings.openAtLogin"
         static let duplicateDetectionEnabled = "settings.duplicateDetectionEnabled"

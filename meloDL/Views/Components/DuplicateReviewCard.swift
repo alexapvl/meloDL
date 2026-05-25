@@ -51,19 +51,19 @@ struct DuplicateReviewCard: View {
                 Button("Skip", role: .destructive) {
                     swipeLeft()
                 }
-                .buttonStyle(.bordered)
+                .meloBorderedButton(destructive: true)
                 .keyboardShortcut(.leftArrow, modifiers: [])
 
                 Button("Preview") {
                     onPreview()
                 }
-                .buttonStyle(.bordered)
+                .meloBorderedButton()
                 .keyboardShortcut("p", modifiers: [])
 
                 Button("Download anyway") {
                     swipeRight()
                 }
-                .buttonStyle(.borderedProminent)
+                .meloBorderedButton()
                 .keyboardShortcut(.rightArrow, modifiers: [])
             }
         }

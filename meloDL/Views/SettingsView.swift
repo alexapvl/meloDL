@@ -11,6 +11,7 @@ struct SettingsView: View {
     let onReplayOnboarding: () -> Void
     #endif
     @State private var selection: SettingsDestination = .downloads
+    @State private var isBackButtonHovered = false
     @Environment(\.controlActiveState) private var controlActiveState
 
     init(
@@ -48,22 +49,6 @@ struct SettingsView: View {
 
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 3) {
-            Button(action: onDismiss) {
-                HStack(spacing: 10) {
-                    Image(systemName: "arrow.left")
-                        .font(.system(size: 15, weight: .regular))
-                        .frame(width: 18)
-                    Text("Back to app")
-                        .font(.callout)
-                }
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-                .contentShape(.rect)
-            }
-            .buttonStyle(.plain)
-            .padding(.bottom, 12)
-
             ForEach(SettingsDestination.allCases, id: \.self) { destination in
                 SettingsSidebarRow(
                     destination: destination,
@@ -74,6 +59,8 @@ struct SettingsView: View {
             }
 
             Spacer(minLength: 0)
+
+            sidebarFooter
         }
         .padding(.top, SettingsLayout.sidebarContentTopInset)
         .padding(.horizontal, 6)
@@ -88,6 +75,35 @@ struct SettingsView: View {
         controlActiveState == .inactive
             ? SettingsTheme.sidebarInactiveBackground
             : SettingsTheme.sidebarActiveBackground
+    }
+
+    private var sidebarFooter: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Divider()
+                .overlay(SettingsTheme.rowDivider)
+
+            Button(action: onDismiss) {
+                HStack(spacing: 10) {
+                    Image(systemName: "arrow.left")
+                        .font(.system(size: 15, weight: .regular))
+                        .frame(width: 18)
+                    Text("Back to app")
+                    Spacer(minLength: 0)
+                }
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .background(backButtonFill, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .onHover { isBackButtonHovered = $0 }
+        }
+    }
+
+    private var backButtonFill: Color {
+        isBackButtonHovered ? Color.primary.opacity(0.08) : .clear
     }
 
     @ViewBuilder
@@ -209,9 +225,9 @@ private enum SettingsLayout {
     static let pageHorizontalPadding: CGFloat = 44
     static let pageTopPadding: CGFloat = 46
     static let pageBottomPadding: CGFloat = 28
-    static let sidebarWidth: CGFloat = 210
+    static let sidebarWidth: CGFloat = 230
     static let sidebarContentTopInset: CGFloat = 64
-    static let sidebarContentBottomPadding: CGFloat = 16
+    static let sidebarContentBottomPadding: CGFloat = 12
     static let pageSpacing: CGFloat = 34
     static let sectionSpacing: CGFloat = 12
     static let rowSpacing: CGFloat = 0
@@ -516,29 +532,11 @@ struct UpdateSettingsView: View {
 
     var body: some View {
         SettingsPage(title: "Updates", subtitle: "Control app update behavior.") {
-            VStack(alignment: .leading, spacing: SettingsLayout.pageSpacing) {
-                SettingsSection(title: "Preferences") {
-                    SettingsToggleRow(
-                        title: "Automatically check for app updates",
-                        description: "Sparkle will look for new meloDL releases in the background.",
-                        isOn: $automaticallyChecks
-                    ) { _, newValue in
-                        updater.automaticallyChecksForUpdates = newValue
-                    }
-                }
-
-                SettingsSection(title: "Manual Check") {
-                    SettingsRow(
-                        title: "Check for Updates",
-                        description: "Ask Sparkle to check for a new meloDL release now."
-                    ) {
-                        Button("Check...") {
-                            updater.checkForUpdates()
-                        }
-                        .disabled(!updater.canCheckForUpdates)
-                    }
-                }
-            }
+            UpdatesPreferencesContent(
+                style: .settings,
+                updater: updater,
+                automaticallyChecks: $automaticallyChecks
+            )
         }
     }
 }
@@ -564,7 +562,7 @@ struct DebugSettingsView: View {
                         } label: {
                             Label("Replay Onboarding", systemImage: "arrow.clockwise")
                         }
-                        .buttonStyle(.borderedProminent)
+                        .meloBorderedButton()
                     }
                     SettingsDivider()
                     SettingsRow(
@@ -592,149 +590,27 @@ struct DebugSettingsView: View {
 
 struct DownloadsSettingsView: View {
     @ObservedObject var appSettings: AppSettings
-    @StateObject private var fileService = FileService()
 
     var body: some View {
         SettingsPage(title: "Downloads", subtitle: "Default behavior for new download batches.") {
-            VStack(alignment: .leading, spacing: SettingsLayout.pageSpacing) {
-                SettingsSection(title: "Download Folder") {
-                    SettingsRow(
-                        title: "Folder",
-                        description: appSettings.downloadFolderPath
-                    ) {
-                        Button("Choose Folder") {
-                            fileService.selectFolder()
-                        }
-                    }
-                }
-
-                SettingsSection(title: "Audio Defaults") {
-                    SettingsRow(
-                        title: "Quality",
-                        description: "Default audio quality for converted downloads."
-                    ) {
-                        Picker("Quality", selection: $appSettings.quality) {
-                            ForEach(AudioQuality.allCases, id: \.self) { quality in
-                                Text(quality.displayName).tag(quality)
-                            }
-                        }
-                        .labelsHidden()
-                        .pickerStyle(.menu)
-                    }
-
-                    SettingsDivider()
-
-                    SettingsToggleRow(
-                        title: "Embed metadata",
-                        description: "Write title, artist, album, and other metadata into downloaded files.",
-                        isOn: $appSettings.embedMetadata
-                    )
-
-                    SettingsDivider()
-
-                    SettingsToggleRow(
-                        title: "Embed thumbnail",
-                        description: appSettings.format.supportsThumbnailEmbed
-                            ? "Add artwork to supported audio formats."
-                            : "Only available for MP3, M4A, and FLAC formats.",
-                        isOn: $appSettings.embedThumbnail
-                    )
-                    .disabled(!appSettings.format.supportsThumbnailEmbed)
-                }
-
-                SettingsSection(title: "Batch Behavior") {
-                    SettingsToggleRow(
-                        title: "Fast downloads",
-                        description: "Run eligible download work with faster defaults.",
-                        isOn: $appSettings.fastDownloads
-                    )
-                }
-            }
+            DownloadsPreferencesContent(appSettings: appSettings, style: .settings)
             .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .onAppear {
-            fileService.selectedFolder = appSettings.downloadFolderURL
-        }
-        .fileImporter(
-            isPresented: $fileService.showingFolderPicker,
-            allowedContentTypes: [.folder],
-            allowsMultipleSelection: false
-        ) { result in
-            _ = fileService.handleFolderSelection(result: result)
-            if let folder = fileService.selectedFolder {
-                appSettings.downloadFolderPath = folder.path
-            }
         }
     }
 }
 
 struct BehaviorSettingsView: View {
     @ObservedObject var appSettings: AppSettings
-    @State private var showRestartPrompt = false
 
     var body: some View {
         SettingsPage(title: "Behavior", subtitle: "App and post-download actions.") {
-            VStack(alignment: .leading, spacing: SettingsLayout.pageSpacing) {
-                SettingsSection(title: "After Download") {
-                    SettingsToggleRow(
-                        title: "Open download folder",
-                        description: "Reveal the download folder after a successful batch.",
-                        isOn: $appSettings.openFolderOnSuccess
-                    )
-
-                    SettingsDivider()
-
-                    SettingsToggleRow(
-                        title: "Show notification",
-                        description: "Post a macOS notification when a download finishes.",
-                        isOn: $appSettings.notifyOnDownloadCompletion
-                    )
-                }
-
-                SettingsSection(title: "Duplicate Review") {
-                    SettingsToggleRow(
-                        title: "Show gesture tip",
-                        description: "Show the swipe gesture hint in duplicate review.",
-                        isOn: $appSettings.showDuplicateReviewGestureTip
-                    )
-                }
-
-                SettingsSection(title: "App Mode") {
-                    SettingsToggleRow(
-                        title: "Menu bar only",
-                        description: "Run meloDL from the menu bar instead of the Dock.",
-                        isOn: $appSettings.menubarOnlyMode
-                    ) { _, newValue in
-                        if !newValue, appSettings.openAtLogin {
-                            appSettings.openAtLogin = false
-                            LoginItemService.setEnabled(false)
-                        }
-                        showRestartPrompt = true
-                    }
-
-                    SettingsDivider()
-
-                    SettingsToggleRow(
-                        title: "Open at login",
-                        description: appSettings.menubarOnlyMode
-                            ? "Start meloDL automatically when you sign in."
-                            : "Available only when menu bar only mode is enabled.",
-                        isOn: $appSettings.openAtLogin
-                    ) { _, newValue in
-                        LoginItemService.setEnabled(newValue)
-                    }
-                    .disabled(!appSettings.menubarOnlyMode)
-                }
-            }
+            BehaviorPreferencesContent(
+                appSettings: appSettings,
+                style: .settings,
+                notificationDescription: "Post macOS notifications for completed, failed, and attention-needed sessions.",
+                showsRestartPrompt: true
+            )
             .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .alert("Restart Required", isPresented: $showRestartPrompt) {
-            Button("Later", role: .cancel) {}
-            Button("Relaunch Now") {
-                AppRelauncher.relaunch(menubarOnly: appSettings.menubarOnlyMode)
-            }
-        } message: {
-            Text("Please restart meloDL to apply menubar mode changes.")
         }
     }
 }
@@ -752,74 +628,24 @@ struct IndexingSettingsView: View {
     var body: some View {
         SettingsPage(title: "Indexing", subtitle: "Configure duplicate detection indexing roots and maintenance.") {
             VStack(alignment: .leading, spacing: SettingsLayout.pageSpacing) {
-                    SettingsSection(title: "Duplicate Detection") {
-                        SettingsToggleRow(
-                            title: "Duplicate detection",
-                            description: "Check indexed folders before downloading a matching track.",
-                            isOn: $appSettings.duplicateDetectionEnabled
-                        )
+                    DuplicateDetectionPreferencesSection(
+                        appSettings: appSettings,
+                        style: .settings,
+                        scanAction: viewModel.openExactDuplicateFinder,
+                        isScanDisabled: viewModel.roots.isEmpty || viewModel.isIndexing
+                    )
 
-                        SettingsDivider()
-
-                        SettingsRow(
-                            title: "Library duplicate scan",
-                            description: "Shows exact duplicate files grouped by content hash and full path."
-                        ) {
-                            Button("Scan Library for Duplicates") {
-                                viewModel.openExactDuplicateFinder()
-                            }
-                            .disabled(viewModel.roots.isEmpty || viewModel.isIndexing)
-                        }
-                    }
-
-                    VStack(alignment: .leading, spacing: SettingsLayout.sectionSpacing) {
-                        HStack(alignment: .center) {
-                            SettingsSectionTitle(text: "Indexed Folders")
-
-                            Spacer(minLength: 0)
-
-                            indexedFolderControls
-                        }
-
-                        ScrollView {
-                            LazyVStack(alignment: .leading, spacing: 0) {
-                                if viewModel.roots.isEmpty {
-                                    Text("No indexed folders yet")
-                                        .foregroundStyle(.secondary)
-                                        .padding(.horizontal, 12)
-                                        .padding(.vertical, 8)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                } else {
-                                    ForEach(Array(viewModel.roots.enumerated()), id: \.element) { index, root in
-                                        indexedFolderRow(root: root, index: index)
-                                    }
-                                }
-                            }
-                            .frame(maxWidth: .infinity, alignment: .topLeading)
-                        }
-                        .frame(minHeight: 130, maxHeight: 170)
-                        .background(
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .fill(Color(.windowBackgroundColor).opacity(0.28))
-                        )
-                        .onDrop(
-                            of: [UTType.fileURL.identifier],
-                            isTargeted: $dropTargeted,
-                            perform: handleDrop(providers:)
-                        )
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 8)
-                                .stroke(
-                                    dropTargeted ? Color.accentColor : Color.secondary.opacity(0.2),
-                                    lineWidth: 1
-                                )
-                        }
-
-                        Text("Tip: Drag and drop folders into this list to add them.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 2)
-                    }
+                    IndexedFoldersPreferencesSection(
+                        style: .settings,
+                        roots: viewModel.roots,
+                        selectedRoot: $viewModel.selectedRoot,
+                        dropTargeted: $dropTargeted,
+                        isDisabled: viewModel.isIndexing,
+                        feedbackMessage: viewModel.feedbackMessage,
+                        onAdd: viewModel.addRootUsingPanel,
+                        onRemove: viewModel.removeRoot,
+                        onDropProviders: handleDrop(providers:)
+                    )
 
                     SettingsSection(title: "Index Status") {
                         SettingsRow(
@@ -845,21 +671,18 @@ struct IndexingSettingsView: View {
                                 Button("Update index now") {
                                     viewModel.updateIndexNow()
                                 }
+                                .meloBorderedButton()
                                 .disabled(!viewModel.canUpdateIndexNow)
 
                                 Button("Clear indexing data...") {
                                     viewModel.showClearDataConfirmation = true
                                 }
+                                .meloBorderedButton(destructive: true)
                                 .disabled(viewModel.isIndexing)
                             }
                         }
                     }
 
-                    if let feedbackMessage = viewModel.feedbackMessage {
-                        Text(feedbackMessage)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -924,71 +747,6 @@ struct IndexingSettingsView: View {
                 viewModel.reindexAfterDuplicateFinderClosed()
             }
         }
-    }
-
-    private func indexedFolderRow(root: String, index: Int) -> some View {
-        Button {
-            viewModel.selectedRoot = root
-        } label: {
-            Text(root)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .background(indexedFolderRowBackground(root: root, index: index))
-    }
-
-    private func indexedFolderRowBackground(root: String, index: Int) -> Color {
-        if viewModel.selectedRoot == root {
-            return Color.accentColor.opacity(0.62)
-        }
-
-        return index % 2 == 0
-            ? Color(.controlBackgroundColor).opacity(0.55)
-            : Color(.controlBackgroundColor).opacity(0.35)
-    }
-
-    private var indexedFolderControls: some View {
-        let selectedRoot = viewModel.selectedRoot
-
-        return HStack(spacing: 0) {
-            Button {
-                if let selectedRoot {
-                    viewModel.removeRoot(selectedRoot)
-                }
-            } label: {
-                Image(systemName: "minus")
-                    .frame(width: 18, height: 18)
-            }
-            .disabled(selectedRoot == nil || viewModel.isIndexing)
-            .buttonStyle(.plain)
-            .frame(width: 28, height: 24)
-
-            Divider()
-                .frame(height: 16)
-
-            Button {
-                viewModel.addRootUsingPanel()
-            } label: {
-                Image(systemName: "plus")
-                    .frame(width: 18, height: 18)
-            }
-            .disabled(viewModel.isIndexing)
-            .buttonStyle(.plain)
-            .frame(width: 28, height: 24)
-        }
-        .background(
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(Color(.controlBackgroundColor))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .stroke(Color.secondary.opacity(0.25), lineWidth: 1)
-        )
     }
 
     private var lastIndexedText: String {
@@ -1121,8 +879,7 @@ private struct ExactDuplicateFinderSheet: View {
                                                     title: file.filename
                                                 )
                                             }
-                                            .buttonStyle(.bordered)
-                                            .controlSize(.small)
+                                            .meloBorderedButton()
 
                                             if isRekordboxMatch {
                                                 rekordboxMatchTag
@@ -1298,8 +1055,7 @@ private struct ExactDuplicateFinderSheet: View {
                         title: file.filename
                     )
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
+                .meloBorderedButton()
 
                 if isRekordboxMatch {
                     rekordboxMatchTag
@@ -1337,11 +1093,13 @@ private struct ExactDuplicateFinderSheet: View {
                 Button("Previous") {
                     viewModel.moveToPreviousManualGroup()
                 }
+                .meloBorderedButton()
                 .disabled(viewModel.manualCurrentIndex == 0 || viewModel.isRunningSmartCleanup)
 
                 Button("Skip") {
                     viewModel.skipManualGroup()
                 }
+                .meloBorderedButton()
                 .disabled(viewModel.manualCurrentIndex >= viewModel.manualRemainingGroupsCount - 1 || viewModel.isRunningSmartCleanup)
 
                 Button(viewModel.manualCurrentGroupHasStagedApply ? "Restore" : "Keep Selected, Trash Others") {
@@ -1351,12 +1109,13 @@ private struct ExactDuplicateFinderSheet: View {
                         viewModel.applyCurrentManualGroup()
                     }
                 }
-                .buttonStyle(.borderedProminent)
+                .meloBorderedButton(destructive: !viewModel.manualCurrentGroupHasStagedApply)
                 .disabled(viewModel.manualCurrentGroupState == nil || viewModel.isRunningSmartCleanup)
             } else {
                 Button("Manual Review") {
                     viewModel.returnToManualReviewMode()
                 }
+                .meloBorderedButton()
                 .disabled(
                     viewModel.exactDuplicateGroups.isEmpty
                     || viewModel.isScanningExactDuplicates
@@ -1375,6 +1134,7 @@ private struct ExactDuplicateFinderSheet: View {
                 Button("Smart Cleanup...") {
                     viewModel.showSmartCleanupConfirmation = true
                 }
+                .meloBorderedButton(destructive: true)
                 .disabled(
                     viewModel.exactDuplicateGroups.isEmpty
                     || viewModel.isScanningExactDuplicates
@@ -1411,17 +1171,19 @@ private struct ExactDuplicateFinderSheet: View {
                 Button("Cancel Session") {
                     viewModel.showManualSessionCancelDialog = true
                 }
+                .meloBorderedButton()
                 .disabled(viewModel.isRunningSmartCleanup)
 
                 Button("Confirm Session") {
                     viewModel.showManualSessionConfirmDialog = true
                 }
-                .buttonStyle(.borderedProminent)
+                .meloBorderedButton(destructive: true)
                 .disabled(viewModel.isRunningSmartCleanup || !viewModel.hasManualStagedCleanupActions)
             } else {
                 Button("Close") {
                     dismiss()
                 }
+                .meloBorderedButton()
                 .keyboardShortcut(.cancelAction)
                 .disabled(viewModel.isRunningSmartCleanup)
             }
@@ -1489,8 +1251,7 @@ private struct ExactDuplicateFinderSheet: View {
                 Button("Undo") {
                     viewModel.undoLastSmartCleanup()
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
+                .meloBorderedButton()
                 .disabled(viewModel.isRunningSmartCleanup || viewModel.isScanningExactDuplicates)
             }
 
@@ -1566,7 +1327,7 @@ struct AboutSettingsView: View {
 
 struct CreditsSettingsView: View {
     var body: some View {
-        SettingsPage(title: "Credits", subtitle: "People and tools that made meloDL possible.") {
+        SettingsPage(title: "Credits", subtitle: "Tools that made meloDL possible.") {
             VStack(alignment: .leading, spacing: SettingsLayout.pageSpacing) {
                 SettingsSection(title: "Open Source") {
                     SettingsRow(title: "yt-dlp", description: "Download engine for supported media sites.") {

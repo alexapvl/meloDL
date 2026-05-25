@@ -36,5 +36,10 @@ struct DownloadItem: Identifiable {
             case .failed(let msg): return "Error: \(msg)"
             }
         }
+
+        var completedFilepath: String? {
+            guard case .completed(let filepath) = self else { return nil }
+            return filepath
+        }
     }
 }

@@ -3,30 +3,18 @@ import SwiftUI
 
 struct MenuBarContentView: View {
     let appSettings: AppSettings
-    let onCheckAppUpdates: () -> Void
+    let sessionCoordinator: DownloadSessionCoordinator
     let onOpenSettings: () -> Void
-    let onQuit: () -> Void
 
     var body: some View {
-        VStack(spacing: 0) {
-            ContentView(
-                appSettings: appSettings,
-                onCheckAppUpdates: onCheckAppUpdates,
-                onOpenSettings: {
-                    NSApp.activate(ignoringOtherApps: true)
-                    onOpenSettings()
-                }
-            )
-            .frame(width: 580, height: 600)
-
-            Divider()
-
-            HStack {
-                Spacer()
-                Button("Quit meloDL", action: onQuit)
+        ContentView(
+            appSettings: appSettings,
+            coordinator: sessionCoordinator,
+            onOpenSettings: {
+                NSApp.activate(ignoringOtherApps: true)
+                onOpenSettings()
             }
-            .padding(.horizontal)
-            .padding(.vertical, 8)
-        }
+        )
+        .frame(width: 580, height: 600)
     }
 }

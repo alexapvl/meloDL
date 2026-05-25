@@ -6,6 +6,7 @@ final class MenuBarController: NSObject {
     private let statusItem: NSStatusItem
     private let popover: NSPopover
     private let appSettings: AppSettings
+    private let sessionCoordinator: DownloadSessionCoordinator
     private let onCheckAllUpdates: () -> Void
     private let onOpenSettings: () -> Void
     private let onSwitchToDockMode: () -> Void
@@ -13,6 +14,7 @@ final class MenuBarController: NSObject {
 
     init(
         appSettings: AppSettings,
+        sessionCoordinator: DownloadSessionCoordinator,
         onCheckAllUpdates: @escaping () -> Void,
         onOpenSettings: @escaping () -> Void,
         onSwitchToDockMode: @escaping () -> Void,
@@ -21,6 +23,7 @@ final class MenuBarController: NSObject {
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         self.popover = NSPopover()
         self.appSettings = appSettings
+        self.sessionCoordinator = sessionCoordinator
         self.onCheckAllUpdates = onCheckAllUpdates
         self.onOpenSettings = onOpenSettings
         self.onSwitchToDockMode = onSwitchToDockMode
@@ -48,13 +51,12 @@ final class MenuBarController: NSObject {
     private func configurePopover() {
         let rootView = MenuBarContentView(
             appSettings: appSettings,
-            onCheckAppUpdates: onCheckAllUpdates,
-            onOpenSettings: onOpenSettings,
-            onQuit: onQuit
+            sessionCoordinator: sessionCoordinator,
+            onOpenSettings: onOpenSettings
         )
         .disableFocusRings()
         popover.contentViewController = NSHostingController(rootView: rootView)
-        popover.contentSize = NSSize(width: 580, height: 640)
+        popover.contentSize = NSSize(width: 580, height: 600)
         popover.behavior = .transient
     }
 
@@ -138,8 +140,6 @@ final class MenuBarController: NSObject {
 
     @objc
     private func switchToDockMode(_ sender: NSMenuItem) {
-        appSettings.openAtLogin = false
-        LoginItemService.setEnabled(false)
         onSwitchToDockMode()
     }
 

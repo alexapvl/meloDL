@@ -1,6 +1,6 @@
 import Foundation
 
-struct AudioSettings: Equatable {
+struct AudioSettings: Equatable, Sendable {
     var format: AudioFormat
     var quality: AudioQuality
     var embedMetadata: Bool
@@ -19,7 +19,7 @@ struct AudioSettings: Equatable {
     }
 }
 
-enum AudioFormat: String, CaseIterable {
+enum AudioFormat: String, CaseIterable, Sendable {
     case mp3 = "mp3"
     case wav = "wav"
     case m4a = "m4a"
@@ -41,7 +41,7 @@ enum AudioFormat: String, CaseIterable {
     }
 }
 
-enum AudioQuality: String, CaseIterable {
+enum AudioQuality: String, CaseIterable, Sendable {
     case high = "High"
     case medium = "Medium"
     case low = "Low"

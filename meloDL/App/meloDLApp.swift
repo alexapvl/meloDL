@@ -20,12 +20,15 @@ enum AppWindowID {
 }
 
 @main
+@MainActor
 struct meloDLApp: App {
-    @StateObject private var appSettings = AppSettings()
+    @StateObject private var appSettings: AppSettings
+    @StateObject private var sessionCoordinator: DownloadSessionCoordinator
     @State private var menuBarController: MenuBarController?
     @State private var didTriggerLaunchReindex = false
     @State private var isShowingSettings = false
     @Environment(\.openWindow) private var openWindow
+    @NSApplicationDelegateAdaptor(AppLifecycleDelegate.self) private var appLifecycleDelegate
     private let notificationDelegate = DownloadNotificationCenterDelegate()
     private let launchMenubarOnlyMode: Bool
     private let updaterController = SPUStandardUpdaterController(
@@ -49,17 +52,16 @@ struct meloDLApp: App {
 
         let isMenubarOnly = defaults.bool(forKey: SettingsKeys.menubarOnlyMode)
         let onboardingCompleted = defaults.bool(forKey: SettingsKeys.onboardingCompleted)
+        let appSettings = AppSettings()
+        let sessionCoordinator = DownloadSessionCoordinator(appSettings: appSettings)
+        _appSettings = StateObject(wrappedValue: appSettings)
+        _sessionCoordinator = StateObject(wrappedValue: sessionCoordinator)
+        AppLifecycleDelegate.sessionCoordinator = sessionCoordinator
         self.launchMenubarOnlyMode = isMenubarOnly && onboardingCompleted
         UNUserNotificationCenter.current().delegate = notificationDelegate
         DownloadNotificationService.shared.configureNotificationCategories()
         AppModeController.applyMenubarOnlyMode(launchMenubarOnlyMode)
-        if launchMenubarOnlyMode {
-            let openAtLogin = defaults.bool(forKey: SettingsKeys.openAtLogin)
-            LoginItemService.setEnabled(openAtLogin)
-        } else {
-            defaults.set(false, forKey: SettingsKeys.openAtLogin)
-            LoginItemService.setEnabled(false)
-        }
+        LoginItemService.setEnabled(defaults.bool(forKey: SettingsKeys.openAtLogin))
     }
 
     var body: some Scene {
@@ -125,7 +127,7 @@ struct meloDLApp: App {
                 if appSettings.onboardingCompleted {
                     ContentView(
                         appSettings: appSettings,
-                        onCheckAppUpdates: checkForAppUpdates,
+                        coordinator: sessionCoordinator,
                         onOpenSettings: showSettingsPage
                     )
                 } else {
@@ -152,10 +154,7 @@ struct meloDLApp: App {
     }
 
     private func checkForAllUpdates() {
-        checkForAppUpdates()
-        Task.detached(priority: .utility) {
-            await GitHubUpdateService.shared.checkForUpdates()
-        }
+        sessionCoordinator.checkForAllUpdates(checkForAppUpdates: checkForAppUpdates)
     }
 
     #if DEBUG
@@ -235,6 +234,7 @@ struct meloDLApp: App {
         guard menuBarController == nil else { return }
         menuBarController = MenuBarController(
             appSettings: appSettings,
+            sessionCoordinator: sessionCoordinator,
             onCheckAllUpdates: checkForAllUpdates,
             onOpenSettings: showSettingsPage,
             onSwitchToDockMode: switchToDockMode,
@@ -266,6 +266,33 @@ private final class DownloadNotificationCenterDelegate: NSObject, UNUserNotifica
                                 willPresent notification: UNNotification,
                                 withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
         completionHandler([.banner, .sound])
+    }
+}
+
+@MainActor
+private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
+    static weak var sessionCoordinator: DownloadSessionCoordinator?
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let sessionCoordinator = Self.sessionCoordinator, sessionCoordinator.hasActiveSessionsForQuit else {
+            return .terminateNow
+        }
+
+        let alert = NSAlert()
+        alert.messageText = "Quit and cancel active downloads?"
+        alert.informativeText = "Active sessions will be marked as cancelled. Waiting and review sessions will stay in your history."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Quit and Cancel Downloads")
+        alert.addButton(withTitle: "Stay")
+
+        if alert.runModal() == .alertFirstButtonReturn {
+            Task {
+                await sessionCoordinator.cancelActiveSessionsForQuitAndPersist()
+                sender.reply(toApplicationShouldTerminate: true)
+            }
+            return .terminateLater
+        }
+        return .terminateCancel
     }
 }
 

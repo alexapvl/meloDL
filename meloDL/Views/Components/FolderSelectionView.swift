@@ -22,7 +22,7 @@ struct FolderSelectionView: View {
                 fileService.selectFolder()
             }
             .disabled(isDisabled)
-            .buttonStyle(.bordered)
+            .meloBorderedButton()
             .fixedSize()
             .layoutPriority(1)
         }

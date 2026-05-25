@@ -299,314 +299,55 @@ struct OnboardingView: View {
     }
 
     private var downloadsStep: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            OnboardingPanel(
-                systemImage: "folder",
-                title: "Download folder",
-                subtitle: "This is where completed audio files land."
-            ) {
-                HStack(spacing: 10) {
-                    pathToken(appSettings.downloadFolderPath, systemImage: "folder.fill")
-
-                    Button {
-                        chooseDownloadFolder()
-                    } label: {
-                        Label("Choose", systemImage: "folder.badge.plus")
-                    }
-                    .buttonStyle(.bordered)
-                    .fixedSize()
-                }
-            }
-
-            OnboardingPanel(
-                systemImage: "waveform",
-                title: "Audio defaults",
-                subtitle: "Set the default quality and file metadata for new downloads."
-            ) {
-                VStack(alignment: .leading, spacing: 14) {
-                    HStack(spacing: 12) {
-                        Text("Quality")
-                            .font(.callout.weight(.medium))
-                            .frame(width: 86, alignment: .leading)
-
-                        Picker("Quality", selection: $appSettings.quality) {
-                            ForEach(AudioQuality.allCases, id: \.self) { quality in
-                                Text(quality.displayName).tag(quality)
-                            }
-                        }
-                        .labelsHidden()
-                        .pickerStyle(.segmented)
-                    }
-
-                    OnboardingToggleRow(
-                        title: "Embed metadata",
-                        subtitle: "Write artist, title, album, and related tags into the audio file.",
-                        isOn: $appSettings.embedMetadata
-                    )
-
-                    if appSettings.format.supportsThumbnailEmbed {
-                        OnboardingToggleRow(
-                            title: "Embed thumbnail",
-                            subtitle: "Attach cover art when the selected format supports it.",
-                            isOn: $appSettings.embedThumbnail
-                        )
-                    } else {
-                        detailNote("Thumbnail embed is only available for MP3, M4A, and FLAC formats.")
-                    }
-                }
-            }
-
-            OnboardingPanel(
-                systemImage: "speedometer",
-                title: "Batch behavior",
-                subtitle: "Choose how aggressively download batches should run."
-            ) {
-                OnboardingToggleRow(
-                    title: "Fast downloads",
-                    subtitle: "Run parallel workers for faster batches.",
-                    isOn: $appSettings.fastDownloads
-                )
-            }
-        }
+        DownloadsPreferencesContent(
+            appSettings: appSettings,
+            style: .onboarding,
+            onDownloadFolderSelected: proposeRootAddition(path:)
+        )
     }
 
     private var behaviorStep: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            OnboardingPanel(
-                systemImage: "checkmark.circle",
-                title: "After download",
-                subtitle: "Decide what happens when a batch finishes."
-            ) {
-                VStack(alignment: .leading, spacing: 14) {
-                    OnboardingToggleRow(
-                        title: "Open download folder",
-                        subtitle: "Reveal the destination folder after a successful batch.",
-                        isOn: $appSettings.openFolderOnSuccess
-                    )
-
-                    OnboardingToggleRow(
-                        title: "Download notifications",
-                        subtitle: notificationStatusText ?? "Show a macOS notification when work is done.",
-                        isOn: $appSettings.notifyOnDownloadCompletion
-                    )
-                    .onChange(of: appSettings.notifyOnDownloadCompletion) { _, newValue in
-                        Task {
-                            if newValue {
-                                _ = await DownloadNotificationService.shared.requestAuthorizationIfNeeded()
-                            }
-                            await refreshNotificationStatusText()
-                        }
+        BehaviorPreferencesContent(
+            appSettings: appSettings,
+            style: .onboarding,
+            notificationDescription: notificationStatusText ?? "Show macOS notifications for session completion, failures, and review prompts.",
+            onNotificationChanged: { newValue in
+                Task {
+                    if newValue {
+                        _ = await DownloadNotificationService.shared.requestAuthorizationIfNeeded()
                     }
+                    await refreshNotificationStatusText()
                 }
             }
-
-            OnboardingPanel(
-                systemImage: "hand.draw",
-                title: "Duplicate review",
-                subtitle: "Keep the duplicate review interaction discoverable."
-            ) {
-                OnboardingToggleRow(
-                    title: "Show gesture tip",
-                    subtitle: "Display the swipe tip in the duplicate review flow.",
-                    isOn: $appSettings.showDuplicateReviewGestureTip
-                )
-            }
-
-            OnboardingPanel(
-                systemImage: "menubar.rectangle",
-                title: "App mode",
-                subtitle: "Choose whether meloDL lives as a normal windowed app or only in the menu bar."
-            ) {
-                VStack(alignment: .leading, spacing: 14) {
-                    OnboardingToggleRow(
-                        title: "Use menubar-only mode",
-                        subtitle: "Start as a compact menu bar utility.",
-                        isOn: $appSettings.menubarOnlyMode
-                    )
-                    .onChange(of: appSettings.menubarOnlyMode) { _, newValue in
-                        if !newValue, appSettings.openAtLogin {
-                            appSettings.openAtLogin = false
-                            LoginItemService.setEnabled(false)
-                        }
-                    }
-
-                    OnboardingToggleRow(
-                        title: "Open at login",
-                        subtitle: appSettings.menubarOnlyMode
-                            ? "Launch meloDL automatically when you sign in."
-                            : "Available after enabling menubar-only mode.",
-                        isOn: $appSettings.openAtLogin
-                    )
-                    .disabled(!appSettings.menubarOnlyMode)
-                    .opacity(appSettings.menubarOnlyMode ? 1 : 0.55)
-                    .onChange(of: appSettings.openAtLogin) { _, newValue in
-                        LoginItemService.setEnabled(newValue)
-                    }
-                }
-            }
-        }
+        )
     }
 
     private var indexingStep: some View {
         VStack(alignment: .leading, spacing: 14) {
-            OnboardingPanel(
-                systemImage: "magnifyingglass",
-                title: "Duplicate detection",
-                subtitle: "Index your music folders so meloDL can warn before downloading the same track again."
-            ) {
-                OnboardingToggleRow(
-                    title: "Check for duplicates before download",
-                    subtitle: "Compare new downloads against indexed folders.",
-                    isOn: $appSettings.duplicateDetectionEnabled
-                )
-            }
+            DuplicateDetectionPreferencesSection(appSettings: appSettings, style: .onboarding)
 
-            OnboardingPanel(
-                systemImage: "externaldrive",
-                title: "Indexed folders",
-                subtitle: "Add every folder where your existing music library lives."
-            ) {
-                VStack(alignment: .leading, spacing: 12) {
-                    indexedFolderList
-
-                    HStack(spacing: 10) {
-                        HStack(spacing: 0) {
-                            Button {
-                                removeSelectedRoot()
-                            } label: {
-                                Image(systemName: "minus")
-                                    .frame(width: 20, height: 20)
-                            }
-                            .disabled(selectedRoot == nil)
-                            .buttonStyle(.plain)
-                            .help("Remove selected folder")
-                            .frame(width: 30, height: 26)
-
-                            Divider()
-                                .frame(height: 16)
-
-                            Button {
-                                showingIndexedFolderPicker = true
-                            } label: {
-                                Image(systemName: "plus")
-                                    .frame(width: 20, height: 20)
-                            }
-                            .buttonStyle(.plain)
-                            .help("Add indexed folder")
-                            .frame(width: 30, height: 26)
-                        }
-                        .background(Color(.controlBackgroundColor), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                .stroke(Color.secondary.opacity(0.25), lineWidth: 1)
-                        )
-
-                        Text("Tip: Drag and drop folders into this list to add them.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-
-                        Spacer(minLength: 0)
-
-                        Text("\(indexedRoots.count) folder\(indexedRoots.count == 1 ? "" : "s")")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(Color(.controlBackgroundColor), in: Capsule(style: .continuous))
-                    }
-
-                    if let feedbackMessage {
-                        detailNote(feedbackMessage)
-                    }
-                }
-            }
-        }
-    }
-
-    private var indexedFolderList: some View {
-        List(selection: $selectedRoot) {
-            if indexedRoots.isEmpty {
-                ContentUnavailableView(
-                    "No folders selected",
-                    systemImage: "folder.badge.plus",
-                    description: Text("Add at least one indexed folder before continuing.")
-                )
-                .frame(maxWidth: .infinity, minHeight: 128)
-                .listRowBackground(Color.clear)
-            } else {
-                ForEach(indexedRoots, id: \.self) { root in
-                    HStack(spacing: 10) {
-                        Image(systemName: "folder.fill")
-                            .foregroundStyle(.secondary)
-                        Text(root)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                    .tag(root)
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        selectedRoot = root
-                    }
-                    .listRowBackground(Color(.controlBackgroundColor).opacity(0.45))
-                }
-            }
-        }
-        .frame(minHeight: 150, maxHeight: 190)
-        .scrollContentBackground(.hidden)
-        .listStyle(.plain)
-        .background(Color(.windowBackgroundColor).opacity(0.25), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .onDrop(
-            of: [UTType.fileURL.identifier],
-            isTargeted: $dropTargeted,
-            perform: handleDrop(providers:)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(
-                    dropTargeted ? Color.accentColor : Color.secondary.opacity(0.2),
-                    lineWidth: dropTargeted ? 2 : 1
-                )
+            IndexedFoldersPreferencesSection(
+                style: .onboarding,
+                roots: indexedRoots,
+                selectedRoot: $selectedRoot,
+                dropTargeted: $dropTargeted,
+                feedbackMessage: feedbackMessage,
+                onAdd: { showingIndexedFolderPicker = true },
+                onRemove: removeRoot,
+                onDropProviders: handleDrop(providers:)
+            )
         }
     }
 
     private var updatesStep: some View {
         VStack(alignment: .leading, spacing: 14) {
-            OnboardingPanel(
-                systemImage: "arrow.triangle.2.circlepath",
-                title: "App updates",
-                subtitle: "Keep meloDL current without needing to check manually."
-            ) {
-                VStack(alignment: .leading, spacing: 14) {
-                    OnboardingToggleRow(
-                        title: "Automatically check for app updates",
-                        subtitle: "Sparkle will look for new meloDL releases in the background.",
-                        isOn: $automaticallyChecksForUpdates
-                    )
-                    .onChange(of: automaticallyChecksForUpdates) { _, newValue in
-                        updater.automaticallyChecksForUpdates = newValue
-                    }
+            UpdatesPreferencesContent(
+                style: .onboarding,
+                updater: updater,
+                automaticallyChecks: $automaticallyChecksForUpdates
+            )
 
-                    HStack(spacing: 10) {
-                        Button {
-                            updater.checkForUpdates()
-                        } label: {
-                            Label("Check now", systemImage: "arrow.clockwise")
-                        }
-                        .buttonStyle(.bordered)
-                        .disabled(!updater.canCheckForUpdates)
-
-                        Text(updater.canCheckForUpdates ? "Manual checks remain available from the app menu." : "Update checks are not available right now.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-
-            OnboardingPanel(
-                systemImage: "checkmark.seal",
-                title: "Ready",
-                subtitle: "Onboarding is complete. All changes will be editable in Settings."
-            ) {
+            PreferencesSummarySection {
                 VStack(alignment: .leading, spacing: 10) {
                     SummaryRow(label: "Downloads", value: appSettings.downloadFolderURL.displayName)
                     SummaryRow(label: "Indexing", value: "\(indexedRoots.count) folder\(indexedRoots.count == 1 ? "" : "s")")
@@ -626,28 +367,6 @@ struct OnboardingView: View {
         case .behavior, .updates:
             return nil
         }
-    }
-
-    private func pathToken(_ path: String, systemImage: String) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: systemImage)
-                .foregroundStyle(.secondary)
-            Text(path)
-                .lineLimit(1)
-                .truncationMode(.middle)
-        }
-        .font(.callout)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
-        .background(Color(.controlBackgroundColor), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-    }
-
-    private func detailNote(_ text: String) -> some View {
-        Label(text, systemImage: "info.circle")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
     }
 
     private func move(to newStep: Step) {
@@ -707,25 +426,11 @@ struct OnboardingView: View {
         move(to: newStep)
     }
 
-    private func chooseDownloadFolder() {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = false
-        panel.canCreateDirectories = true
-        panel.prompt = "Choose Folder"
-        panel.directoryURL = URL(fileURLWithPath: appSettings.downloadFolderPath, isDirectory: true)
-
-        guard panel.runModal() == .OK, let folderURL = panel.url else { return }
-        appSettings.downloadFolderPath = folderURL.path
-        proposeRootAddition(path: folderURL.path)
-    }
-
     private func moveFromBehaviorToIndexing() async {
         isAdvancing = true
         defer { isAdvancing = false }
 
-        if appSettings.notifyOnDownloadCompletion {
+        if appSettings.notifyOnSessionEvents {
             _ = await DownloadNotificationService.shared.requestAuthorizationIfNeeded()
         }
         await refreshNotificationStatusText()
@@ -767,8 +472,8 @@ struct OnboardingView: View {
     }
 
     private func refreshNotificationStatusText() async {
-        guard appSettings.notifyOnDownloadCompletion else {
-            notificationStatusText = "Notifications are disabled for download completion."
+        guard appSettings.notifyOnSessionEvents else {
+            notificationStatusText = "Notifications are disabled for session events."
             return
         }
 
@@ -785,9 +490,8 @@ struct OnboardingView: View {
         }
     }
 
-    private func removeSelectedRoot() {
-        guard let selectedRoot else { return }
-        applyRoots(indexedRoots.filter { $0 != selectedRoot })
+    private func removeRoot(_ root: String) {
+        applyRoots(indexedRoots.filter { $0 != root })
         self.selectedRoot = nil
     }
 
@@ -994,74 +698,6 @@ private struct OnboardingStepRailRow: View {
         if isCurrent { return .blue }
         if isComplete { return .green }
         return .secondary
-    }
-}
-
-private struct OnboardingPanel<Content: View>: View {
-    let systemImage: String
-    let title: String
-    let subtitle: String
-    @ViewBuilder let content: Content
-
-    init(systemImage: String, title: String, subtitle: String, @ViewBuilder content: () -> Content) {
-        self.systemImage = systemImage
-        self.title = title
-        self.subtitle = subtitle
-        self.content = content()
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: systemImage)
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 22)
-
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(title)
-                        .font(.headline)
-                    Text(subtitle)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-
-            content
-        }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(Color.secondary.opacity(0.14), lineWidth: 1)
-        )
-    }
-}
-
-private struct OnboardingToggleRow: View {
-    let title: String
-    let subtitle: String
-    @Binding var isOn: Bool
-
-    var body: some View {
-        HStack(alignment: .center, spacing: 14) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title)
-                    .font(.callout.weight(.medium))
-                Text(subtitle)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            Spacer(minLength: 12)
-
-            Toggle("", isOn: $isOn)
-                .labelsHidden()
-                .toggleStyle(.switch)
-        }
     }
 }
 

@@ -6,7 +6,24 @@ struct StatusDisplayView: View {
     let downloads: [DownloadItem]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Label("Queue", systemImage: "tray.full")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+
+                Spacer()
+
+                if !downloads.isEmpty {
+                    Text("\(downloads.count)")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(Color.secondary.opacity(0.12), in: Capsule())
+                }
+            }
+
             if !status.isEmpty && status != "Idle" {
                 Text(status)
                     .foregroundStyle(statusColor)
@@ -15,7 +32,7 @@ struct StatusDisplayView: View {
                     .padding(.vertical, 8)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(Color(.controlBackgroundColor))
-                    .cornerRadius(8)
+                    .clipShape(.rect(cornerRadius: 8))
             }
 
             if !downloads.isEmpty {
@@ -28,15 +45,37 @@ struct StatusDisplayView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color(.controlBackgroundColor).opacity(0.35))
-                .cornerRadius(8)
+                .background(Color(.controlBackgroundColor).opacity(0.35), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
             } else {
-                Text("Queue is empty")
+                emptyState
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.28), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.secondary.opacity(0.13), lineWidth: 1)
+        }
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "arrow.down.circle")
+                .font(.system(size: 34, weight: .regular))
+                .foregroundStyle(.secondary.opacity(0.7))
+
+            VStack(spacing: 3) {
+                Text("No downloads yet")
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(.primary.opacity(0.85))
+
+                Text("Paste a supported URL above to start a new download.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
@@ -59,9 +98,25 @@ struct DownloadItemRow: View {
             }
 
             Spacer()
+
+            if let filepath = previewFilepath {
+                Button("Preview") {
+                    TrackPreviewService.shared.previewTrack(
+                        atPath: filepath,
+                        title: item.title
+                    )
+                }
+                .meloBorderedButton()
+                .help("Preview in Finder")
+            }
         }
         .padding(.horizontal, 10)
-        .padding(.vertical, 4)
+        .padding(.vertical, 7)
+    }
+
+    private var previewFilepath: String? {
+        guard let filepath = item.status.completedFilepath else { return nil }
+        return FileManager.default.fileExists(atPath: filepath) ? filepath : nil
     }
 
     @ViewBuilder

@@ -239,6 +239,7 @@ final class DownloadEngine {
             entry.url,
             "--ffmpeg-location", ffmpegPath.path,
             "--output", "\(outputFolder.path)/%(title)s.%(ext)s",
+            "--print", "after_move:filepath",
             "--no-playlist",
             "--extract-audio",
             "--audio-format", audioSettings.format.rawValue,
@@ -256,7 +257,7 @@ final class DownloadEngine {
         let output = try await runProcess(ytdlpPath, arguments: arguments)
 
         if output.exitCode == 0 {
-            let filepath = entry.title
+            let filepath = completedFilepath(from: output) ?? entry.title
             let totalMs = Int(Date().timeIntervalSince(startedAt) * 1_000)
             logger.info("Item finished \(entry.url, privacy: .public) in \(totalMs)ms")
             return .completed(url: entry.url, filepath: filepath, worker: workerID)
@@ -266,6 +267,15 @@ final class DownloadEngine {
         let totalMs = Int(Date().timeIntervalSince(startedAt) * 1_000)
         logger.error("Item failed \(entry.url, privacy: .public) after \(totalMs)ms: \(errorMsg, privacy: .public)")
         return .error(url: entry.url, message: errorMsg, worker: workerID)
+    }
+
+    private func completedFilepath(from output: ProcessOutput) -> String? {
+        let fileManager = FileManager.default
+        return output.stdout
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .map { ($0 as NSString).expandingTildeInPath }
+            .last { !$0.isEmpty && fileManager.fileExists(atPath: $0) }
     }
 
     // MARK: - Playlist URL Extraction

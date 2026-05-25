@@ -58,6 +58,30 @@ final class DownloadNotificationService {
         }
     }
 
+    func postSessionNotification(title: String, body: String) {
+        Task {
+            let authorized = await ensureNotificationAuthorization()
+            guard authorized else { return }
+
+            let content = UNMutableNotificationContent()
+            content.title = title
+            content.body = body
+            content.sound = .default
+
+            let request = UNNotificationRequest(
+                identifier: Self.notificationIdentifierPrefix + UUID().uuidString,
+                content: content,
+                trigger: nil
+            )
+
+            do {
+                try await addRequest(request)
+            } catch {
+                logger.error("Failed to schedule session notification: \(error.localizedDescription)")
+            }
+        }
+    }
+
     func handleNotificationResponse(_ response: UNNotificationResponse) {
         guard response.actionIdentifier == Self.openFolderActionIdentifier else { return }
         let userInfo = response.notification.request.content.userInfo
