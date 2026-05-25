@@ -150,6 +150,7 @@ private struct SessionSidebar: View {
                 }
                 .menuStyle(.button)
                 .buttonStyle(.plain)
+                .focusable(false)
                 .onHover { isFormatHovered = $0 }
                 .help("Format for the next session")
             }

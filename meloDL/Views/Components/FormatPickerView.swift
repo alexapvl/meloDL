@@ -18,6 +18,7 @@ struct FormatPickerView: View {
             .labelsHidden()
             .pickerStyle(.menu)
             .controlSize(.large)
+            .focusable(false)
             .disabled(isDisabled)
         }
     }
