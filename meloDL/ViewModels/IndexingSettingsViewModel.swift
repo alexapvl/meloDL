@@ -46,6 +46,8 @@ final class IndexingSettingsViewModel: ObservableObject {
     private let rekordboxImportService: RekordboxXMLImportService
     private var rekordboxCanonicalPaths: Set<String> = []
     private var pollingTask: Task<Void, Never>?
+    private var pollingGeneration = 0
+    private var activeIndexingRequests = 0
     private var smartCleanupUndoEntries: [SmartCleanupUndoEntry] = []
     private var smartCleanupUndoDismissTask: Task<Void, Never>?
 
@@ -65,9 +67,9 @@ final class IndexingSettingsViewModel: ObservableObject {
 
     func onAppear() {
         syncRootsFromSettings()
-        startPolling()
         Task {
             await refreshSnapshot()
+            startActivityPollingIfNeeded()
         }
     }
 
@@ -111,9 +113,12 @@ final class IndexingSettingsViewModel: ObservableObject {
     func updateIndexNow() {
         let currentRoots = roots
         guard !currentRoots.isEmpty else { return }
+        beginIndexingRequest()
         Task {
             await indexer.reindexNow(roots: currentRoots)
+            endIndexingRequest()
             await refreshSnapshot()
+            startActivityPollingIfNeeded()
         }
     }
 
@@ -183,9 +188,12 @@ final class IndexingSettingsViewModel: ObservableObject {
     func reindexAfterDuplicateFinderClosed() {
         let rootsSnapshot = roots
         guard !rootsSnapshot.isEmpty else { return }
+        beginIndexingRequest()
         Task {
             await indexer.reindexNow(roots: rootsSnapshot)
+            endIndexingRequest()
             await refreshSnapshot()
+            startActivityPollingIfNeeded()
         }
     }
 
@@ -199,6 +207,7 @@ final class IndexingSettingsViewModel: ObservableObject {
 
         exactDuplicateScanError = nil
         isScanningExactDuplicates = true
+        startActivityPolling()
         Task {
             defer { isScanningExactDuplicates = false }
             await indexer.reindexIfNeeded(roots: roots)
@@ -234,6 +243,7 @@ final class IndexingSettingsViewModel: ObservableObject {
         isRunningSmartCleanup = true
         exactDuplicateScanError = nil
         let rootsSnapshot = roots
+        startActivityPolling()
 
         Task {
             defer { isRunningSmartCleanup = false }
@@ -279,6 +289,7 @@ final class IndexingSettingsViewModel: ObservableObject {
         isRunningSmartCleanup = true
         exactDuplicateScanError = nil
         let rootsSnapshot = roots
+        startActivityPolling()
 
         Task {
             defer { isRunningSmartCleanup = false }
@@ -386,6 +397,7 @@ final class IndexingSettingsViewModel: ObservableObject {
         isRunningSmartCleanup = true
         exactDuplicateScanError = nil
         let rootsSnapshot = roots
+        startActivityPolling()
 
         Task {
             defer { isRunningSmartCleanup = false }
@@ -573,14 +585,56 @@ final class IndexingSettingsViewModel: ObservableObject {
         manualQueue.count
     }
 
-    private func startPolling() {
+    private func startActivityPollingIfNeeded() {
+        guard shouldPollActivity else {
+            stopActivityPolling()
+            return
+        }
+        startActivityPolling()
+    }
+
+    private var shouldPollActivity: Bool {
+        isIndexing || isScanningExactDuplicates || isRunningSmartCleanup
+    }
+
+    private func startActivityPolling() {
         pollingTask?.cancel()
+        pollingGeneration += 1
+        let generation = pollingGeneration
         pollingTask = Task { [weak self] in
             while let self, !Task.isCancelled {
                 await self.refreshSnapshot()
+                guard self.shouldContinueActivityPolling(generation: generation) else {
+                    break
+                }
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
             }
+            self?.finishActivityPolling(generation: generation)
         }
+    }
+
+    private func stopActivityPolling() {
+        pollingTask?.cancel()
+        pollingTask = nil
+    }
+
+    private func shouldContinueActivityPolling(generation: Int) -> Bool {
+        pollingGeneration == generation && shouldPollActivity
+    }
+
+    private func finishActivityPolling(generation: Int) {
+        guard pollingGeneration == generation else { return }
+        pollingTask = nil
+    }
+
+    private func beginIndexingRequest() {
+        activeIndexingRequests += 1
+        isIndexing = true
+        startActivityPolling()
+    }
+
+    private func endIndexingRequest() {
+        activeIndexingRequests = max(0, activeIndexingRequests - 1)
     }
 
     private func refreshSnapshot() async {
@@ -591,7 +645,7 @@ final class IndexingSettingsViewModel: ObservableObject {
             let countsByRoot = try await store.countTracksByRoot()
             let sizeBreakdown = try await store.databaseSizeBreakdown()
             syncRootsFromSettings()
-            isIndexing = status.isIndexing
+            isIndexing = status.isIndexing || activeIndexingRequests > 0
             lastIndexedAt = status.lastSuccessfulReindexAt
             indexedTrackCount = count
             indexedTrackCountsByRoot = countsByRoot
@@ -647,18 +701,30 @@ final class IndexingSettingsViewModel: ObservableObject {
         let canonical = Array(Set(newRoots.map(TrackIndexStore.canonicalize(path:)).filter { !$0.isEmpty })).sorted()
         roots = canonical
         appSettings.duplicateIndexRoots = canonical
+        let shouldReindex = triggerSmartSync && !canonical.isEmpty
+        if shouldReindex {
+            beginIndexingRequest()
+        }
 
         Task {
             do {
                 try await store.ensureReady(defaultRootPath: appSettings.downloadFolderPath)
                 try await store.replaceRoots(with: canonical)
-                if triggerSmartSync, !canonical.isEmpty {
+                if shouldReindex {
                     await indexer.reindexNow(roots: canonical)
                 } else if canonical.isEmpty {
                     try await store.clearTracksData()
                 }
+                if shouldReindex {
+                    endIndexingRequest()
+                }
                 await refreshSnapshot()
+                startActivityPollingIfNeeded()
             } catch {
+                if shouldReindex {
+                    endIndexingRequest()
+                }
+                isIndexing = activeIndexingRequests > 0
                 exactDuplicateScanError = "Failed to update roots: \(error.localizedDescription)"
             }
         }
