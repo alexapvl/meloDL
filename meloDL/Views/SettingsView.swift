@@ -638,10 +638,10 @@ struct IndexingSettingsView: View {
                     IndexedFoldersPreferencesSection(
                         style: .settings,
                         roots: viewModel.roots,
+                        rootTrackCounts: viewModel.indexedTrackCountsByRoot,
                         selectedRoot: $viewModel.selectedRoot,
                         dropTargeted: $dropTargeted,
                         isDisabled: viewModel.isIndexing,
-                        feedbackMessage: viewModel.feedbackMessage,
                         onAdd: viewModel.addRootUsingPanel,
                         onRemove: viewModel.removeRoot,
                         onDropProviders: handleDrop(providers:)
@@ -911,6 +911,7 @@ private struct ExactDuplicateFinderSheet: View {
         .padding(16)
         .frame(minWidth: 760, minHeight: 460, alignment: .topLeading)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .disableFocusRings()
         .task(id: viewModel.showExactDuplicateFinder) {
             if viewModel.showExactDuplicateFinder && viewModel.exactDuplicateGroups.isEmpty {
                 viewModel.refreshExactDuplicateGroups()
@@ -1129,12 +1130,14 @@ private struct ExactDuplicateFinderSheet: View {
                 }
                 .labelsHidden()
                 .pickerStyle(.menu)
+                .focusable(false)
                 .disabled(viewModel.isRunningSmartCleanup)
 
                 Button("Smart Cleanup...") {
                     viewModel.showSmartCleanupConfirmation = true
                 }
                 .meloBorderedButton(destructive: true)
+                .focusable(false)
                 .disabled(
                     viewModel.exactDuplicateGroups.isEmpty
                     || viewModel.isScanningExactDuplicates
@@ -1162,6 +1165,7 @@ private struct ExactDuplicateFinderSheet: View {
                         .disabled(viewModel.isRunningSmartCleanup)
                     }
                 }
+                .focusable(false)
                 .disabled(viewModel.isRunningSmartCleanup)
             }
 
@@ -1185,6 +1189,7 @@ private struct ExactDuplicateFinderSheet: View {
                 }
                 .meloBorderedButton()
                 .keyboardShortcut(.cancelAction)
+                .focusable(false)
                 .disabled(viewModel.isRunningSmartCleanup)
             }
         }

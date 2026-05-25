@@ -271,6 +271,28 @@ actor TrackIndexStore {
         return Int(sqlite3_column_int64(statement, 0))
     }
 
+    func countTracksByRoot() throws -> [String: Int] {
+        try ensureReady()
+        let sql = """
+        SELECT root_path, COUNT(*)
+        FROM tracks
+        GROUP BY root_path;
+        """
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+
+        guard sqlite3_prepare_v2(try database, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw makeError(message: "Failed to prepare track count by root query")
+        }
+
+        var counts: [String: Int] = [:]
+        while sqlite3_step(statement) == SQLITE_ROW {
+            let rootPath = sqliteText(statement, column: 0)
+            counts[rootPath] = Int(sqlite3_column_int64(statement, 1))
+        }
+        return counts
+    }
+
     func clearTracksData() throws {
         try ensureReady()
         try execute(sql: "DELETE FROM tracks;")

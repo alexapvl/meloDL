@@ -10,11 +10,11 @@ final class IndexingSettingsViewModel: ObservableObject {
     @Published private(set) var isIndexing = false
     @Published private(set) var lastIndexedAt: Date?
     @Published private(set) var indexedTrackCount = 0
+    @Published private(set) var indexedTrackCountsByRoot: [String: Int] = [:]
     @Published private(set) var databaseSizeMainBytes: Int64 = 0
     @Published private(set) var databaseSizeWalBytes: Int64 = 0
     @Published private(set) var databaseSizeShmBytes: Int64 = 0
     @Published private(set) var inaccessibleRoots: [String] = []
-    @Published private(set) var feedbackMessage: String?
     @Published private(set) var exactDuplicateGroups: [ExactDuplicateGroup] = []
     @Published private(set) var isScanningExactDuplicates = false
     @Published private(set) var exactDuplicateScanError: String?
@@ -111,23 +111,19 @@ final class IndexingSettingsViewModel: ObservableObject {
     func updateIndexNow() {
         let currentRoots = roots
         guard !currentRoots.isEmpty else { return }
-        feedbackMessage = nil
         Task {
             await indexer.reindexNow(roots: currentRoots)
             await refreshSnapshot()
-            feedbackMessage = "Index is up to date."
         }
     }
 
     func clearIndexData() {
-        feedbackMessage = nil
         Task {
             do {
                 try await store.clearTracksData()
                 await refreshSnapshot()
-                feedbackMessage = "Index data cleared."
             } catch {
-                feedbackMessage = "Failed to clear index data: \(error.localizedDescription)"
+                exactDuplicateScanError = "Failed to clear index data: \(error.localizedDescription)"
             }
         }
     }
@@ -232,7 +228,6 @@ final class IndexingSettingsViewModel: ObservableObject {
                 failedCount: 0,
                 reclaimedBytes: 0
             )
-            feedbackMessage = "Nothing to clean up."
             return
         }
 
@@ -260,10 +255,7 @@ final class IndexingSettingsViewModel: ObservableObject {
             )
 
             if removalResult.failedCount > 0 {
-                feedbackMessage = "Cleanup finished with partial failures."
                 exactDuplicateScanError = "Failed to move \(removalResult.failedCount) file(s) to Trash."
-            } else {
-                feedbackMessage = "Smart cleanup removed \(removalResult.removedCount) duplicate file(s)."
             }
 
             if removalResult.removedCount > 0, !removalResult.undoEntries.isEmpty {
@@ -305,7 +297,6 @@ final class IndexingSettingsViewModel: ObservableObject {
             if restoreResult.failedCount > 0 {
                 exactDuplicateScanError = "Undo restored \(restoreResult.restoredCount) file(s), but \(restoreResult.failedCount) could not be restored."
             }
-            feedbackMessage = "Undid smart cleanup for \(restoreResult.restoredCount) file(s)."
         }
     }
 
@@ -405,7 +396,6 @@ final class IndexingSettingsViewModel: ObservableObject {
             }
 
             guard !filesToDelete.isEmpty else {
-                feedbackMessage = "No staged actions to apply."
                 resetManualReviewSessionDecisions()
                 return
             }
@@ -429,10 +419,7 @@ final class IndexingSettingsViewModel: ObservableObject {
             }
 
             if result.failedCount > 0 {
-                feedbackMessage = "Session applied with partial failures."
                 exactDuplicateScanError = "Failed to move \(result.failedCount) file(s) to Trash."
-            } else {
-                feedbackMessage = "Session applied: moved \(result.removedCount) file(s) to Trash."
             }
         }
     }
@@ -444,7 +431,6 @@ final class IndexingSettingsViewModel: ObservableObject {
         manualCurrentIndex = 0
         showManualSessionCancelDialog = false
         showOverviewMode()
-        feedbackMessage = "Manual review session canceled. No staged changes were applied."
     }
 
     func selectManualKeeper(path: String) {
@@ -483,7 +469,6 @@ final class IndexingSettingsViewModel: ObservableObject {
 
     func chooseKeepParentForChildConflict() {
         pendingConflict = nil
-        feedbackMessage = "Skipped nested folder because parent is already indexed."
     }
 
     func chooseKeepBothForChildConflict() {
@@ -494,7 +479,6 @@ final class IndexingSettingsViewModel: ObservableObject {
 
     func chooseKeepChildrenForParentConflict() {
         pendingConflict = nil
-        feedbackMessage = "Kept existing child folders."
     }
 
     func chooseReplaceChildrenWithParent() {
@@ -503,7 +487,6 @@ final class IndexingSettingsViewModel: ObservableObject {
         var newRoots = roots.filter { !children.contains($0) }
         newRoots.append(proposed)
         updateRoots(newRoots, triggerSmartSync: true)
-        feedbackMessage = "Replaced child folders with parent folder."
     }
 
     var canUpdateIndexNow: Bool {
@@ -605,17 +588,19 @@ final class IndexingSettingsViewModel: ObservableObject {
             try await store.ensureReady(defaultRootPath: appSettings.downloadFolderPath)
             let status = await indexer.status()
             let count = try await store.countTracks()
+            let countsByRoot = try await store.countTracksByRoot()
             let sizeBreakdown = try await store.databaseSizeBreakdown()
             syncRootsFromSettings()
             isIndexing = status.isIndexing
             lastIndexedAt = status.lastSuccessfulReindexAt
             indexedTrackCount = count
+            indexedTrackCountsByRoot = countsByRoot
             databaseSizeMainBytes = sizeBreakdown.mainBytes
             databaseSizeWalBytes = sizeBreakdown.walBytes
             databaseSizeShmBytes = sizeBreakdown.shmBytes
             inaccessibleRoots = roots.filter { !Self.isAccessibleDirectory(path: $0) }
         } catch {
-            feedbackMessage = "Failed to refresh index status: \(error.localizedDescription)"
+            exactDuplicateScanError = "Failed to refresh index status: \(error.localizedDescription)"
         }
     }
 
@@ -636,7 +621,6 @@ final class IndexingSettingsViewModel: ObservableObject {
         guard !overlap.proposedRoot.isEmpty else { return }
 
         if overlap.exactMatch {
-            feedbackMessage = "Folder is already in the index roots list."
             return
         }
 
@@ -675,7 +659,7 @@ final class IndexingSettingsViewModel: ObservableObject {
                 }
                 await refreshSnapshot()
             } catch {
-                feedbackMessage = "Failed to update roots: \(error.localizedDescription)"
+                exactDuplicateScanError = "Failed to update roots: \(error.localizedDescription)"
             }
         }
     }

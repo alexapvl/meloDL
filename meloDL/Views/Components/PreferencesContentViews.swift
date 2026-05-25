@@ -259,39 +259,48 @@ struct DuplicateDetectionPreferencesSection: View {
 struct IndexedFoldersPreferencesSection: View {
     let style: PreferencesFormStyle
     let roots: [String]
+    var rootTrackCounts: [String: Int] = [:]
     @Binding var selectedRoot: String?
     @Binding var dropTargeted: Bool
     var isDisabled = false
-    var feedbackMessage: String?
     let onAdd: () -> Void
     let onRemove: (String) -> Void
     let onDropProviders: ([NSItemProvider]) -> Bool
 
     var body: some View {
-        PreferencesSection(
-            style: style,
-            systemImage: "externaldrive",
-            title: "Indexed folders",
-            subtitle: "Add every folder where your existing music library lives."
-        ) {
+        if style == .settings {
             VStack(alignment: .leading, spacing: 12) {
-                IndexedFoldersPickerView(
-                    roots: roots,
-                    selectedRoot: $selectedRoot,
-                    dropTargeted: $dropTargeted,
-                    isDisabled: isDisabled,
-                    emptyTitle: "No folders selected",
-                    emptyDescription: "Add at least one indexed folder before continuing.",
-                    onAdd: onAdd,
-                    onRemove: onRemove,
-                    onDropProviders: onDropProviders
-                )
-
-                if let feedbackMessage {
-                    PreferencesNote(text: feedbackMessage)
+                Text("Indexed Folders")
+                    .font(.title3.weight(.semibold))
+                indexedFoldersPicker
+            }
+        } else {
+            PreferencesSection(
+                style: style,
+                systemImage: "externaldrive",
+                title: "Indexed folders",
+                subtitle: "Add every folder where your existing music library lives."
+            ) {
+                VStack(alignment: .leading, spacing: 12) {
+                    indexedFoldersPicker
                 }
             }
         }
+    }
+
+    private var indexedFoldersPicker: some View {
+        IndexedFoldersPickerView(
+            roots: roots,
+            rootTrackCounts: rootTrackCounts,
+            selectedRoot: $selectedRoot,
+            dropTargeted: $dropTargeted,
+            isDisabled: isDisabled,
+            emptyTitle: "No folders selected",
+            emptyDescription: "Add at least one indexed folder before continuing.",
+            onAdd: onAdd,
+            onRemove: onRemove,
+            onDropProviders: onDropProviders
+        )
     }
 }
 
@@ -546,16 +555,5 @@ private struct PreferencesPathToken: View {
         .padding(.vertical, 8)
         .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
         .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-    }
-}
-
-private struct PreferencesNote: View {
-    let text: String
-
-    var body: some View {
-        Label(text, systemImage: "info.circle")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
     }
 }

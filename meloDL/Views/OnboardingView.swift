@@ -15,7 +15,6 @@ struct OnboardingView: View {
     @State private var selectedRoot: String?
     @State private var dropTargeted = false
     @State private var showingIndexedFolderPicker = false
-    @State private var feedbackMessage: String?
     @State private var notificationStatusText: String?
     @State private var pendingParentFolderConflict: ParentFolderConflict?
     @State private var automaticallyChecksForUpdates: Bool
@@ -331,7 +330,6 @@ struct OnboardingView: View {
                 roots: indexedRoots,
                 selectedRoot: $selectedRoot,
                 dropTargeted: $dropTargeted,
-                feedbackMessage: feedbackMessage,
                 onAdd: { showingIndexedFolderPicker = true },
                 onRemove: removeRoot,
                 onDropProviders: handleDrop(providers:)
@@ -500,12 +498,10 @@ struct OnboardingView: View {
         guard !overlap.proposedRoot.isEmpty else { return }
 
         if overlap.exactMatch {
-            feedbackMessage = "Folder is already indexed."
             return
         }
 
-        if let parentRoot = overlap.parentRoot {
-            feedbackMessage = "\"\(overlap.proposedRoot)\" is already covered by \"\(parentRoot)\"."
+        if overlap.parentRoot != nil {
             return
         }
 
@@ -514,14 +510,12 @@ struct OnboardingView: View {
                 parentRoot: overlap.proposedRoot,
                 childRoots: overlap.childRoots
             )
-            feedbackMessage = nil
             return
         }
 
         var updated = indexedRoots
         updated.append(overlap.proposedRoot)
         applyRoots(updated)
-        feedbackMessage = nil
     }
 
     private func replaceChildFoldersWithPendingParent() {
@@ -530,7 +524,6 @@ struct OnboardingView: View {
         var updatedRoots = indexedRoots.filter { !childRoots.contains(TrackIndexStore.canonicalize(path: $0)) }
         updatedRoots.append(pendingParentFolderConflict.parentRoot)
         applyRoots(updatedRoots)
-        feedbackMessage = nil
         self.pendingParentFolderConflict = nil
     }
 
