@@ -50,6 +50,7 @@ private struct SessionSidebar: View {
     @Environment(\.controlActiveState) private var controlActiveState
     @State private var isSettingsHovered = false
     @State private var isFormatHovered = false
+    @State private var isDestinationHovered = false
     @State private var sessionPendingDeletion: DownloadSession?
     @State private var isShowingDeleteConfirmation = false
 
@@ -108,6 +109,197 @@ private struct SessionSidebar: View {
         isShowingDeleteConfirmation = true
     }
 
+    private func submitDraftURL() {
+        coordinator.submitDraftURL()
+    }
+
+    private var destinationMenu: some View {
+        Menu {
+            Button {
+                clearDownloadFolderOverride()
+            } label: {
+                destinationMenuLabel(
+                    title: "Default Folder",
+                    isSelected: !hasDownloadFolderOverride
+                )
+            }
+
+            if hasDownloadFolderOverride {
+                Label("Current: \(destinationMenuTitle(for: effectiveDownloadFolderPath))", systemImage: "checkmark")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if !indexedDestinationPaths.isEmpty {
+                Divider()
+                Section("Indexed folders") {
+                    ForEach(indexedDestinationPaths, id: \.self) { path in
+                        Button {
+                            setDownloadFolderOverride(path)
+                        } label: {
+                            destinationMenuLabel(
+                                title: destinationMenuTitle(for: path),
+                                isSelected: pathsMatch(effectiveDownloadFolderPath, path)
+                            )
+                        }
+                    }
+                }
+            }
+
+            Divider()
+
+            Button {
+                chooseDownloadFolderOverride()
+            } label: {
+                Label("Choose folder...", systemImage: "folder.badge.plus")
+            }
+        } label: {
+            Image(systemName: hasDownloadFolderOverride ? "folder.fill" : "folder")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(destinationControlForeground)
+                .frame(width: 24, height: 24)
+                .background(destinationControlBackground, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .contentShape(.rect)
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .focusable(false)
+        .onHover { isDestinationHovered = $0 }
+        .help(destinationHelpText)
+    }
+
+    private var formatMenu: some View {
+        Menu {
+            ForEach(AudioFormat.allCases, id: \.self) { format in
+                Button {
+                    appSettings.format = format
+                } label: {
+                    if appSettings.format == format {
+                        Label(format.displayName, systemImage: "checkmark")
+                    } else {
+                        Text(format.displayName)
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "waveform")
+                    .font(.caption.weight(.semibold))
+                Text(appSettings.format.displayName)
+                    .font(.caption.weight(.semibold))
+            }
+            .foregroundStyle(formatControlForeground)
+            .padding(.horizontal, 8)
+            .frame(height: 24)
+            .background(formatControlBackground, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .contentShape(.rect)
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .focusable(false)
+        .onHover { isFormatHovered = $0 }
+        .help("Format for the next session")
+    }
+
+    @ViewBuilder
+    private func destinationMenuLabel(title: String, isSelected: Bool) -> some View {
+        if isSelected {
+            Label(title, systemImage: "checkmark")
+        } else {
+            Text(title)
+        }
+    }
+
+    private var effectiveDownloadFolderPath: String {
+        coordinator.temporaryDownloadFolderPath ?? appSettings.downloadFolderPath
+    }
+
+    private var hasDownloadFolderOverride: Bool {
+        guard let downloadFolderOverridePath = coordinator.temporaryDownloadFolderPath else { return false }
+        return !pathsMatch(downloadFolderOverridePath, appSettings.downloadFolderPath)
+    }
+
+    private var indexedDestinationPaths: [String] {
+        let defaultPath = canonicalPath(appSettings.downloadFolderPath)
+        var seen = Set<String>()
+        return appSettings.duplicateIndexRoots
+            .map(canonicalPath)
+            .filter { !$0.isEmpty && $0 != defaultPath }
+            .filter { seen.insert($0).inserted }
+            .sorted { lhs, rhs in
+                destinationMenuTitle(for: lhs).localizedStandardCompare(destinationMenuTitle(for: rhs)) == .orderedAscending
+            }
+    }
+
+    private var destinationHelpText: String {
+        if hasDownloadFolderOverride {
+            return "Downloads go to \(effectiveDownloadFolderPath) until the app closes.\nThis does not change Settings."
+        }
+        return "Downloads go to the Settings folder.\nChoose a temporary folder for this app session."
+    }
+
+    private func destinationMenuTitle(for path: String) -> String {
+        let abbreviatedPath = (path as NSString).abbreviatingWithTildeInPath
+        return abbreviatePath(abbreviatedPath, maxLength: 48)
+    }
+
+    private func abbreviatePath(_ path: String, maxLength: Int) -> String {
+        let components = path.split(separator: "/").map(String.init)
+        if path.hasPrefix("~/") {
+            let homeRelativePath = components.dropFirst().joined(separator: "/")
+            guard homeRelativePath.count > maxLength else { return homeRelativePath }
+            guard components.count > 2 else { return homeRelativePath.truncated(to: maxLength) }
+            return "\(components[1])/.../\(components.last ?? "")"
+        }
+
+        guard path.count > maxLength else { return path }
+        guard components.count > 2 else { return path.truncated(to: maxLength) }
+
+        let suffix = components.suffix(2).joined(separator: "/")
+        if path.hasPrefix("/") {
+            let firstComponent = components.first ?? ""
+            return "/\(firstComponent)/.../\(suffix)"
+        }
+        return "\(components[0])/.../\(suffix)"
+    }
+
+    private func setDownloadFolderOverride(_ path: String) {
+        let normalizedPath = canonicalPath(path)
+        guard !normalizedPath.isEmpty else { return }
+        if pathsMatch(normalizedPath, appSettings.downloadFolderPath) {
+            clearDownloadFolderOverride()
+        } else {
+            coordinator.temporaryDownloadFolderPath = normalizedPath
+        }
+    }
+
+    private func clearDownloadFolderOverride() {
+        coordinator.temporaryDownloadFolderPath = nil
+    }
+
+    private func chooseDownloadFolderOverride() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        panel.directoryURL = URL(fileURLWithPath: effectiveDownloadFolderPath, isDirectory: true)
+        panel.prompt = "Use Folder"
+        panel.message = "Choose a temporary download folder for this app session."
+
+        if panel.runModal() == .OK, let url = panel.url {
+            setDownloadFolderOverride(url.path)
+        }
+    }
+
+    private func pathsMatch(_ lhs: String, _ rhs: String) -> Bool {
+        canonicalPath(lhs) == canonicalPath(rhs)
+    }
+
+    private func canonicalPath(_ path: String) -> String {
+        TrackIndexStore.canonicalize(path: path)
+    }
+
     private var submitArea: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 7) {
@@ -120,46 +312,15 @@ private struct SessionSidebar: View {
 
                 Spacer(minLength: 8)
 
-                Menu {
-                    ForEach(AudioFormat.allCases, id: \.self) { format in
-                        Button {
-                            appSettings.format = format
-                        } label: {
-                            if appSettings.format == format {
-                                Label(format.displayName, systemImage: "checkmark")
-                            } else {
-                                Text(format.displayName)
-                            }
-                        }
-                    }
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "waveform")
-                            .font(.caption.weight(.semibold))
-                        Text(appSettings.format.displayName)
-                            .font(.caption.weight(.semibold))
-                        Image(systemName: "chevron.up.chevron.down")
-                            .font(.caption2.weight(.semibold))
-                            .opacity(0.78)
-                    }
-                    .foregroundStyle(formatControlForeground)
-                    .padding(.horizontal, 8)
-                    .frame(height: 24)
-                    .background(formatControlBackground, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-                    .contentShape(.rect)
-                }
-                .menuStyle(.button)
-                .buttonStyle(.plain)
-                .focusable(false)
-                .onHover { isFormatHovered = $0 }
-                .help("Format for the next session")
+                destinationMenu
+                formatMenu
             }
             .padding(.horizontal, 12)
 
             NoFocusRingURLField(
                 placeholder: "Paste URL",
                 text: $coordinator.draftURL,
-                onSubmit: coordinator.submitDraftURL
+                onSubmit: submitDraftURL
             )
             .frame(height: 30)
             .padding(.leading, 9)
@@ -220,6 +381,20 @@ private struct SessionSidebar: View {
 
     private var formatControlBackground: Color {
         isFormatHovered ? Color.primary.opacity(0.08) : .clear
+    }
+
+    private var destinationControlForeground: Color {
+        if hasDownloadFolderOverride {
+            return .accentColor
+        }
+        return isDestinationHovered ? .primary : Color.secondary
+    }
+
+    private var destinationControlBackground: Color {
+        if hasDownloadFolderOverride && isDestinationHovered {
+            return Color.accentColor.opacity(0.14)
+        }
+        return isDestinationHovered ? Color.primary.opacity(0.08) : .clear
     }
 
     private var sidebarBackground: Color {

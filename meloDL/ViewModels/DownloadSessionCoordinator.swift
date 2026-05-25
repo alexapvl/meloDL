@@ -9,6 +9,7 @@ final class DownloadSessionCoordinator: ObservableObject {
     @Published private(set) var sessions: [DownloadSession] = []
     @Published var selectedSessionID: UUID?
     @Published private(set) var isIndexingTracks = false
+    @Published var temporaryDownloadFolderPath: String?
 
     private let appSettings: AppSettings
     private let sessionStore: DownloadSessionStore
@@ -53,14 +54,14 @@ final class DownloadSessionCoordinator: ObservableObject {
         }
     }
 
-    func submitDraftURL() {
+    func submitDraftURL(outputFolderPath: String? = nil) {
         let rawURL = draftURL.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !rawURL.isEmpty else { return }
 
         var session = DownloadSession(
             sourceURL: rawURL,
             displayTitle: DownloadSession.fallbackTitle(for: rawURL),
-            outputFolderPath: appSettings.downloadFolderPath,
+            outputFolderPath: outputFolderPath ?? temporaryDownloadFolderPath ?? appSettings.downloadFolderPath,
             format: appSettings.format
         )
         session.status = .waitingForSlot
