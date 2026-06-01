@@ -77,6 +77,21 @@ struct DownloadSession: Identifiable, Sendable {
         return (min(max(current, 0), downloadableItems.count), downloadableItems.count)
     }
 
+    var duplicateReviewTotal: Int {
+        items.filter(\.hadDuplicateMatch).count
+    }
+
+    var duplicateReviewRemaining: Int {
+        items.filter { $0.status == .waitingForUser && $0.duplicateMatch != nil }.count
+    }
+
+    var duplicateReviewPosition: Int {
+        let total = duplicateReviewTotal
+        guard total > 0 else { return 1 }
+        let remaining = duplicateReviewRemaining
+        return min(max(total - remaining + 1, 1), total)
+    }
+
     static func fallbackTitle(for rawURL: String) -> String {
         guard let components = URLComponents(string: rawURL),
               let host = components.host,
@@ -142,6 +157,7 @@ struct DownloadSessionItem: Identifiable, Sendable {
     var duplicateMatch: DuplicateMatchSnapshot?
     var errorMessage: String?
     var itemIndex: Int
+    var hadDuplicateMatch: Bool
 
     init(
         id: UUID = UUID(),
@@ -151,7 +167,8 @@ struct DownloadSessionItem: Identifiable, Sendable {
         outputFilePath: String? = nil,
         duplicateMatch: DuplicateMatchSnapshot? = nil,
         errorMessage: String? = nil,
-        itemIndex: Int
+        itemIndex: Int,
+        hadDuplicateMatch: Bool = false
     ) {
         self.id = id
         self.sourceURL = sourceURL
@@ -161,6 +178,7 @@ struct DownloadSessionItem: Identifiable, Sendable {
         self.duplicateMatch = duplicateMatch
         self.errorMessage = errorMessage
         self.itemIndex = itemIndex
+        self.hadDuplicateMatch = hadDuplicateMatch
     }
 
     var isSkippedDuplicate: Bool {

@@ -576,6 +576,7 @@ private struct SessionDetailPane: View {
     @ObservedObject var coordinator: DownloadSessionCoordinator
     let session: DownloadSession?
     @State private var isRemoveConfirming = false
+    @State private var isConfirmingSkipRemaining = false
 
     var body: some View {
         if let session {
@@ -596,7 +597,7 @@ private struct SessionDetailPane: View {
                 .disabled(reviewItem != nil)
 
                 if let reviewItem {
-                    duplicateReviewOverlay(item: reviewItem, sessionID: session.id)
+                    duplicateReviewOverlay(item: reviewItem, session: session)
                         .transition(.opacity.combined(with: .scale(scale: 0.98)))
                 }
             }
@@ -604,6 +605,7 @@ private struct SessionDetailPane: View {
             .animation(.easeInOut(duration: 0.18), value: reviewItem?.id)
             .onChange(of: session.id) {
                 isRemoveConfirming = false
+                isConfirmingSkipRemaining = false
             }
         } else {
             ContentUnavailableView(
@@ -664,14 +666,19 @@ private struct SessionDetailPane: View {
         }
     }
 
-    private func duplicateReviewOverlay(item: DuplicateReviewItem, sessionID: UUID) -> some View {
+    @ViewBuilder
+    private func duplicateReviewOverlay(item: DuplicateReviewItem, session: DownloadSession) -> some View {
+        let total = session.duplicateReviewTotal
+        let position = session.duplicateReviewPosition
+        let remaining = session.duplicateReviewRemaining
+
         ZStack {
             Rectangle()
                 .fill(.black.opacity(0.18))
                 .ignoresSafeArea()
 
             VStack(alignment: .leading, spacing: 14) {
-                HStack {
+                HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Duplicate Review")
                             .font(.title3.weight(.semibold))
@@ -679,7 +686,20 @@ private struct SessionDetailPane: View {
                             .font(.callout)
                             .foregroundStyle(.secondary)
                     }
-                    Spacer()
+
+                    Spacer(minLength: 16)
+
+                    VStack(alignment: .trailing, spacing: 8) {
+                        Text("\(position)/\(total)")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+
+                        Button(position == 1 ? "Skip all" : "Skip remaining") {
+                            isConfirmingSkipRemaining = true
+                        }
+                        .meloBorderedButton()
+                    }
                 }
 
                 if appSettings.showDuplicateReviewGestureTip {
@@ -689,9 +709,9 @@ private struct SessionDetailPane: View {
 
                 DuplicateReviewCard(
                     item: item,
-                    onSkip: { coordinator.skipCurrentDuplicate(for: sessionID) },
-                    onDownloadAnyway: { coordinator.downloadCurrentDuplicateAnyway(for: sessionID) },
-                    onPreview: { coordinator.previewCurrentDuplicateMatch(for: sessionID) }
+                    onSkip: { coordinator.skipCurrentDuplicate(for: session.id) },
+                    onDownloadAnyway: { coordinator.downloadCurrentDuplicateAnyway(for: session.id) },
+                    onPreview: { coordinator.previewCurrentDuplicateMatch(for: session.id) }
                 )
             }
             .padding(24)
@@ -703,6 +723,18 @@ private struct SessionDetailPane: View {
             }
             .shadow(radius: 22, y: 12)
             .padding(34)
+        }
+        .confirmationDialog(
+            "Skip remaining duplicates?",
+            isPresented: $isConfirmingSkipRemaining,
+            titleVisibility: .visible
+        ) {
+            Button("Skip All", role: .destructive) {
+                coordinator.skipRemainingDuplicates(for: session.id)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The remaining \(remaining) duplicate tracks will be skipped and won't be downloaded.")
         }
     }
 

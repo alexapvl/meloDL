@@ -167,6 +167,20 @@ final class DownloadSessionCoordinator: ObservableObject {
         resolveCurrentDuplicate(for: sessionID, shouldDownload: true)
     }
 
+    func skipRemainingDuplicates(for sessionID: UUID) {
+        mutateSession(sessionID) { session in
+            for index in session.items.indices where session.items[index].status == .waitingForUser && session.items[index].duplicateMatch != nil {
+                session.items[index].status = .skipped
+            }
+            finalizeDuplicateReviewState(in: &session)
+        }
+
+        guard let session = sessions.first(where: { $0.id == sessionID }) else { return }
+        if session.status == .waitingForSlot {
+            scheduleWaitingSessions()
+        }
+    }
+
     func cancelActiveSessionsForQuitAndPersist() async {
         var changedSessions: [DownloadSession] = []
         let activeIDs = sessions.filter { $0.status.isActive }.map(\.id)
@@ -375,6 +389,7 @@ final class DownloadSessionCoordinator: ObservableObject {
                 for index in session.items.indices {
                     if let snapshot = duplicateSnapshotsByURL[session.items[index].sourceURL] {
                         session.items[index].duplicateMatch = snapshot
+                        session.items[index].hadDuplicateMatch = true
                         session.items[index].status = .waitingForUser
                     } else if session.items[index].status == .checkingDuplicates {
                         session.items[index].status = .queued
@@ -561,22 +576,26 @@ final class DownloadSessionCoordinator: ObservableObject {
                 session.items[itemIndex].status = .skipped
             }
 
-            if session.items.contains(where: { $0.status == .waitingForUser && $0.duplicateMatch != nil }) {
-                session.status = .waitingForUser
-                session.attentionReason = .duplicateReview
-            } else {
-                session.attentionReason = nil
-                let hasQueued = session.items.contains { $0.status == .queued }
-                session.status = hasQueued ? .waitingForSlot : .skipped
-                if !hasQueued {
-                    session.completedAt = Date()
-                }
-            }
+            finalizeDuplicateReviewState(in: &session)
         }
 
         guard let session = sessions.first(where: { $0.id == sessionID }) else { return }
         if session.status == .waitingForSlot {
             scheduleWaitingSessions()
+        }
+    }
+
+    private func finalizeDuplicateReviewState(in session: inout DownloadSession) {
+        if session.items.contains(where: { $0.status == .waitingForUser && $0.duplicateMatch != nil }) {
+            session.status = .waitingForUser
+            session.attentionReason = .duplicateReview
+        } else {
+            session.attentionReason = nil
+            let hasQueued = session.items.contains { $0.status == .queued }
+            session.status = hasQueued ? .waitingForSlot : .skipped
+            if !hasQueued {
+                session.completedAt = Date()
+            }
         }
     }
 

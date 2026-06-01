@@ -173,8 +173,20 @@ actor DownloadSessionStore {
             duplicate_reason TEXT,
             error_message TEXT,
             item_index INTEGER NOT NULL,
+            had_duplicate_match INTEGER NOT NULL DEFAULT 0,
             FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
         );
+        """)
+
+        try addColumnIfNotExists(
+            table: "session_items",
+            column: "had_duplicate_match",
+            definition: "INTEGER NOT NULL DEFAULT 0"
+        )
+        try execute(sql: """
+        UPDATE session_items
+        SET had_duplicate_match = 1
+        WHERE duplicate_candidate_path IS NOT NULL AND had_duplicate_match = 0;
         """)
 
         try execute(sql: "CREATE INDEX IF NOT EXISTS session_items_session_idx ON session_items(session_id, item_index);")
@@ -237,9 +249,9 @@ actor DownloadSessionStore {
         INSERT INTO session_items (
             id, session_id, source_url, title, status, output_file_path,
             duplicate_candidate_path, duplicate_candidate_title, duplicate_confidence,
-            duplicate_score, duplicate_reason, error_message, item_index
+            duplicate_score, duplicate_reason, error_message, item_index, had_duplicate_match
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """
         var insertStatement: OpaquePointer?
         defer { sqlite3_finalize(insertStatement) }
@@ -264,6 +276,7 @@ actor DownloadSessionStore {
             bindOptionalText(insertStatement, 11, item.duplicateMatch?.reason)
             bindOptionalText(insertStatement, 12, item.errorMessage)
             sqlite3_bind_int64(insertStatement, 13, Int64(item.itemIndex))
+            sqlite3_bind_int(insertStatement, 14, item.hadDuplicateMatch ? 1 : 0)
 
             guard sqlite3_step(insertStatement) == SQLITE_DONE else {
                 throw makeError(message: "Failed to insert session item")
@@ -275,7 +288,7 @@ actor DownloadSessionStore {
         let sql = """
         SELECT session_id, id, source_url, title, status, output_file_path,
                duplicate_candidate_path, duplicate_candidate_title, duplicate_confidence,
-               duplicate_score, duplicate_reason, error_message, item_index
+               duplicate_score, duplicate_reason, error_message, item_index, had_duplicate_match
         FROM session_items
         ORDER BY session_id ASC, item_index ASC;
         """
@@ -326,7 +339,8 @@ actor DownloadSessionStore {
                 outputFilePath: outputFilePath,
                 duplicateMatch: duplicateMatch,
                 errorMessage: sqliteOptionalText(statement, column: 11),
-                itemIndex: Int(sqlite3_column_int64(statement, 12))
+                itemIndex: Int(sqlite3_column_int64(statement, 12)),
+                hadDuplicateMatch: sqlite3_column_int(statement, 13) != 0 || duplicateMatch != nil
             )
             result[sessionID, default: []].append(item)
         }
@@ -337,6 +351,25 @@ actor DownloadSessionStore {
         guard sqlite3_exec(try database, sql, nil, nil, nil) == SQLITE_OK else {
             throw makeError(message: "Failed to execute SQL")
         }
+    }
+
+    private func addColumnIfNotExists(table: String, column: String, definition: String) throws {
+        let sql = "PRAGMA table_info(\(table));"
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+
+        guard sqlite3_prepare_v2(try database, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw makeError(message: "Failed to prepare table info query")
+        }
+
+        while sqlite3_step(statement) == SQLITE_ROW {
+            let name = sqliteText(statement, column: 1)
+            if name == column {
+                return
+            }
+        }
+
+        try execute(sql: "ALTER TABLE \(table) ADD COLUMN \(column) \(definition);")
     }
 
     private func makeError(message: String) -> DownloadSessionStoreError {
