@@ -90,7 +90,7 @@ final class DownloadSessionCoordinator: ObservableObject {
             session.status = .cancelled
             session.attentionReason = nil
             session.completedAt = Date()
-            for index in session.items.indices where session.items[index].status == .queued || session.items[index].status == .downloading || session.items[index].status == .checkingDuplicates {
+            for index in session.items.indices where session.items[index].status == .queued || session.items[index].status == .downloading || session.items[index].status == .checkingDuplicates || session.items[index].status == .waitingForUser {
                 session.items[index].status = .cancelled
                 session.items[index].errorMessage = "Cancelled"
             }
@@ -182,7 +182,7 @@ final class DownloadSessionCoordinator: ObservableObject {
             sessions[index].attentionReason = nil
             sessions[index].completedAt = Date()
             sessions[index].errorMessage = "Cancelled because meloDL was closed."
-            for itemIndex in sessions[index].items.indices where sessions[index].items[itemIndex].status == .queued || sessions[index].items[itemIndex].status == .downloading || sessions[index].items[itemIndex].status == .checkingDuplicates {
+            for itemIndex in sessions[index].items.indices where sessions[index].items[itemIndex].status == .queued || sessions[index].items[itemIndex].status == .downloading || sessions[index].items[itemIndex].status == .checkingDuplicates || sessions[index].items[itemIndex].status == .waitingForUser {
                 sessions[index].items[itemIndex].status = .cancelled
                 sessions[index].items[itemIndex].errorMessage = "Cancelled"
             }
@@ -480,12 +480,19 @@ final class DownloadSessionCoordinator: ObservableObject {
 
     private func finishSessionAfterDownload(_ sessionID: UUID) {
         mutateSession(sessionID) { session in
+            guard session.status != .cancelled else { return }
+
+            let cancelledItems = session.items.filter { $0.status == .cancelled }
             let failedItems = session.items.filter { $0.status == .failed }
             let completedItems = session.items.filter { $0.status == .completed }
             let skippedItems = session.items.filter { $0.status == .skipped }
 
             session.completedAt = Date()
-            if !failedItems.isEmpty {
+            if !cancelledItems.isEmpty {
+                session.status = .cancelled
+                session.attentionReason = nil
+                session.errorMessage = session.errorMessage ?? "Cancelled"
+            } else if !failedItems.isEmpty {
                 session.status = .failed
                 session.attentionReason = .failed
                 session.errorMessage = failedItems.first?.errorMessage
@@ -512,7 +519,11 @@ final class DownloadSessionCoordinator: ObservableObject {
             session.status = .cancelled
             session.completedAt = Date()
             session.attentionReason = nil
-            session.errorMessage = "Cancelled"
+            session.errorMessage = session.errorMessage ?? "Cancelled"
+            for index in session.items.indices where session.items[index].status == .queued || session.items[index].status == .downloading || session.items[index].status == .checkingDuplicates || session.items[index].status == .waitingForUser {
+                session.items[index].status = .cancelled
+                session.items[index].errorMessage = "Cancelled"
+            }
         }
         activeTasks[sessionID] = nil
         activeEngines[sessionID] = nil
