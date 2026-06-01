@@ -69,13 +69,14 @@ struct meloDLApp: App {
     }
 
     private var mainWindowScene: some Scene {
-        WindowGroup(id: AppWindowID.main) {
+        Window("meloDL", id: AppWindowID.main) {
             mainWindowContent
             .background {
                 MainWindowChromeConfigurator()
                     .frame(width: 0, height: 0)
             }
         }
+        .defaultLaunchBehavior(.presented)
         .windowStyle(.hiddenTitleBar)
         .commands {
             CommandGroup(replacing: .newItem) {
@@ -143,6 +144,9 @@ struct meloDLApp: App {
                 triggerLaunchReindexIfNeeded()
                 menuBarController = nil
                 focusMainWindowIfNeeded()
+                DispatchQueue.main.async {
+                    consolidateMainWindows()
+                }
             }
             .disableFocusRings()
         }
@@ -164,6 +168,8 @@ struct meloDLApp: App {
         AppModeController.applyMenubarOnlyMode(false)
         DispatchQueue.main.async {
             NSApplication.shared.activate(ignoringOtherApps: true)
+            consolidateMainWindows()
+            mainAppWindow()?.makeKeyAndOrderFront(nil)
         }
     }
     #endif
@@ -173,6 +179,10 @@ struct meloDLApp: App {
 
         if mainAppWindow() == nil {
             openWindow(id: AppWindowID.main)
+        }
+
+        DispatchQueue.main.async {
+            consolidateMainWindows()
         }
 
         if launchMenubarOnlyMode {
@@ -207,6 +217,18 @@ struct meloDLApp: App {
     private func mainAppWindow() -> NSWindow? {
         NSApplication.shared.windows.first {
             $0.level == .normal && $0.canBecomeKey && !$0.isMiniaturized
+        }
+    }
+
+    private func consolidateMainWindows() {
+        let mainWindows = NSApplication.shared.windows.filter {
+            $0.level == .normal && $0.canBecomeKey && !$0.isMiniaturized
+        }
+        guard mainWindows.count > 1 else { return }
+
+        let keeper = mainWindows.first(where: \.isKeyWindow) ?? mainWindows.first
+        for window in mainWindows where window !== keeper {
+            window.close()
         }
     }
 

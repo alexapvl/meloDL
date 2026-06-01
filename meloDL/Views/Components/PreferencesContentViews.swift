@@ -381,6 +381,7 @@ private extension DownloadsPreferencesContent {
             }
             .labelsHidden()
             .pickerStyle(.segmented)
+            .focusable(false)
         }
     }
 }
@@ -507,6 +508,7 @@ private struct PreferencesToggleRow: View {
             Toggle("", isOn: $isOn)
                 .labelsHidden()
                 .toggleStyle(.switch)
+                .focusable(style != .onboarding)
         }
     }
 }
@@ -522,6 +524,7 @@ private struct PreferencesStepperRow: View {
         PreferencesRow(style: style, title: title, description: description) {
             Stepper("\(value)", value: $value, in: range)
                 .frame(width: 90, alignment: .trailing)
+                .focusable(style != .onboarding)
         }
     }
 }

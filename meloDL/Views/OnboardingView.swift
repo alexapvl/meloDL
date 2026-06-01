@@ -22,10 +22,11 @@ struct OnboardingView: View {
     @State private var showRestartPrompt = false
     @State private var initialMenubarOnlyMode = false
     @State private var didInitialize = false
-    @State private var navigationDirection = 1
     @State private var outgoingStep: Step?
     @State private var slideProgress: CGFloat = 1
     @State private var isSliding = false
+    @State private var rootTrackCounts: [String: Int] = [:]
+    @State private var trackCountRefreshTask: Task<Void, Never>?
 
     init(appSettings: AppSettings, updater: SPUUpdater, onFinish: @escaping () -> Void) {
         self.appSettings = appSettings
@@ -61,6 +62,18 @@ struct OnboardingView: View {
             setupInitialIndexedRoots()
             Task {
                 await refreshNotificationStatusText()
+            }
+        }
+        .onDisappear {
+            trackCountRefreshTask?.cancel()
+            trackCountRefreshTask = nil
+        }
+        .onChange(of: step) { _, newStep in
+            if newStep == .indexing {
+                startIndexingStepTrackCountRefresh()
+            } else {
+                trackCountRefreshTask?.cancel()
+                trackCountRefreshTask = nil
             }
         }
         .fileImporter(
@@ -107,6 +120,7 @@ struct OnboardingView: View {
                 Text("\"\(pendingParentFolderConflict.parentRoot)\" contains \(pendingParentFolderConflict.childRoots.count) folder\(pendingParentFolderConflict.childRoots.count == 1 ? "" : "s") already in your index.")
             }
         }
+        .disableFocusRings()
     }
 
     private var onboardingBackground: some View {
@@ -149,20 +163,12 @@ struct OnboardingView: View {
     private var stepRail: some View {
         VStack(alignment: .leading, spacing: 10) {
             ForEach(Step.allCases, id: \.self) { currentStep in
-                Button {
-                    guard canSelectStep(currentStep) else { return }
-                    move(to: currentStep)
-                } label: {
-                    OnboardingStepRailRow(
-                        step: currentStep,
-                        isCurrent: currentStep == step,
-                        isComplete: currentStep.rawValue < highestUnlockedStep.rawValue,
-                        isLocked: currentStep.rawValue > highestUnlockedStep.rawValue
-                    )
-                }
-                .buttonStyle(.plain)
-                .focusable(false)
-                .disabled(!canSelectStep(currentStep))
+                OnboardingStepRailRow(
+                    step: currentStep,
+                    isCurrent: currentStep == step,
+                    isComplete: currentStep.rawValue < highestUnlockedStep.rawValue,
+                    isLocked: currentStep.rawValue > highestUnlockedStep.rawValue
+                )
             }
 
             Spacer(minLength: 0)
@@ -189,15 +195,13 @@ struct OnboardingView: View {
             GeometryReader { proxy in
                 let width = proxy.size.width
 
-                ZStack(alignment: .topLeading) {
-                    if let outgoingStep {
-                        stagePage(for: outgoingStep)
-                            .offset(x: outgoingOffset(width: width))
+                HStack(spacing: 0) {
+                    ForEach(Step.allCases, id: \.self) { displayedStep in
+                        stagePage(for: displayedStep)
+                            .frame(width: width, height: proxy.size.height)
                     }
-
-                    stagePage(for: step)
-                        .offset(x: incomingOffset(width: width))
                 }
+                .offset(x: -pageScrollOffset(width: width))
                 .clipped()
             }
 
@@ -206,6 +210,16 @@ struct OnboardingView: View {
             navigationBar
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func pageScrollOffset(width: CGFloat) -> CGFloat {
+        if isSliding, let outgoingStep {
+            let from = CGFloat(outgoingStep.rawValue)
+            let to = CGFloat(step.rawValue)
+            let index = from + (to - from) * slideProgress
+            return index * width
+        }
+        return CGFloat(step.rawValue) * width
     }
 
     private func stagePage(for displayedStep: Step) -> some View {
@@ -228,6 +242,7 @@ struct OnboardingView: View {
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
         .scrollIndicators(.hidden)
+        .id(displayedStep)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
@@ -254,15 +269,6 @@ struct OnboardingView: View {
         }
     }
 
-    private func incomingOffset(width: CGFloat) -> CGFloat {
-        guard outgoingStep != nil else { return 0 }
-        return CGFloat(navigationDirection) * width * (1 - slideProgress)
-    }
-
-    private func outgoingOffset(width: CGFloat) -> CGFloat {
-        -CGFloat(navigationDirection) * width * slideProgress
-    }
-
     private var navigationBar: some View {
         HStack(spacing: 12) {
             Button {
@@ -270,6 +276,7 @@ struct OnboardingView: View {
             } label: {
                 Label("Back", systemImage: "chevron.left")
             }
+            .focusable(false)
             .disabled(step.previous == nil || isAdvancing || isSliding)
 
             if let validationMessage {
@@ -290,6 +297,7 @@ struct OnboardingView: View {
                 }
             }
             .buttonStyle(.borderedProminent)
+            .focusable(false)
             .disabled(isAdvancing || isSliding || validationMessage != nil)
         }
         .padding(.horizontal, 24)
@@ -328,6 +336,7 @@ struct OnboardingView: View {
             IndexedFoldersPreferencesSection(
                 style: .onboarding,
                 roots: indexedRoots,
+                rootTrackCounts: rootTrackCounts,
                 selectedRoot: $selectedRoot,
                 dropTargeted: $dropTargeted,
                 onAdd: { showingIndexedFolderPicker = true },
@@ -371,7 +380,6 @@ struct OnboardingView: View {
         guard newStep != step else { return }
         guard !isSliding else { return }
         let previousStep = step
-        navigationDirection = newStep.rawValue > step.rawValue ? 1 : -1
         outgoingStep = previousStep
         slideProgress = 0
         isSliding = true
@@ -387,12 +395,6 @@ struct OnboardingView: View {
             slideProgress = 1
             isSliding = false
         }
-    }
-
-    private func canSelectStep(_ candidate: Step) -> Bool {
-        guard candidate.rawValue <= highestUnlockedStep.rawValue else { return false }
-        guard candidate.rawValue > step.rawValue else { return true }
-        return validationMessage == nil
     }
 
     private func moveBack() {
@@ -540,6 +542,42 @@ struct OnboardingView: View {
 
         if let selectedRoot, !normalized.contains(selectedRoot) {
             self.selectedRoot = nil
+        }
+
+        if step == .indexing {
+            startIndexingStepTrackCountRefresh()
+        }
+    }
+
+    private func startIndexingStepTrackCountRefresh() {
+        trackCountRefreshTask?.cancel()
+        trackCountRefreshTask = Task {
+            let roots = indexedRoots
+            do {
+                try await TrackIndexStore.shared.ensureReady(defaultRootPath: appSettings.downloadFolderPath)
+                try await TrackIndexStore.shared.replaceRoots(with: roots)
+                if !roots.isEmpty {
+                    await TrackIndexer.shared.reindexNow(roots: roots)
+                }
+            } catch {}
+
+            repeat {
+                await refreshRootTrackCounts()
+                guard !Task.isCancelled else { return }
+                let isIndexing = await TrackIndexer.shared.status().isIndexing
+                if !isIndexing { break }
+                try? await Task.sleep(nanoseconds: 400_000_000)
+            } while true
+        }
+    }
+
+    private func refreshRootTrackCounts() async {
+        do {
+            try await TrackIndexStore.shared.ensureReady(defaultRootPath: appSettings.downloadFolderPath)
+            let counts = try await TrackIndexStore.shared.countTracksByRoot()
+            rootTrackCounts = Dictionary(uniqueKeysWithValues: indexedRoots.map { ($0, counts[$0] ?? 0) })
+        } catch {
+            rootTrackCounts = Dictionary(uniqueKeysWithValues: indexedRoots.map { ($0, 0) })
         }
     }
 

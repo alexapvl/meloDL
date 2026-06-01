@@ -545,7 +545,6 @@ struct UpdateSettingsView: View {
 struct DebugSettingsView: View {
     @ObservedObject var appSettings: AppSettings
     let onReplayOnboarding: () -> Void
-    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         SettingsPage(title: "Debug", subtitle: "Development-only tools for app state.") {
@@ -557,7 +556,6 @@ struct DebugSettingsView: View {
                     ) {
                         Button {
                             onReplayOnboarding()
-                            openWindow(id: AppWindowID.main)
                             focusMainWindow()
                         } label: {
                             Label("Replay Onboarding", systemImage: "arrow.clockwise")

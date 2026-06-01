@@ -113,6 +113,7 @@ extension ButtonStyle where Self == MeloBorderedButtonStyle {
 extension View {
     func meloBorderedButton(destructive: Bool = false, armed: Bool = false) -> some View {
         buttonStyle(MeloBorderedButtonStyle(destructive: destructive, armed: armed))
+            .focusable(false)
     }
 }
 
