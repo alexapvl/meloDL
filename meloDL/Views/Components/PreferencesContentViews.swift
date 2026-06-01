@@ -521,7 +521,7 @@ private struct PreferencesStepperRow: View {
     var body: some View {
         PreferencesRow(style: style, title: title, description: description) {
             Stepper("\(value)", value: $value, in: range)
-                .frame(width: 90)
+                .frame(width: 90, alignment: .trailing)
         }
     }
 }
