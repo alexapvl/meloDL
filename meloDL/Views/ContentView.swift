@@ -714,11 +714,13 @@ private struct SessionDetailPane: View {
             VStack(spacing: 0) {
                 let sortedItems = session.items.sorted { $0.itemIndex < $1.itemIndex }
                 if sortedItems.isEmpty {
-                    Text(session.status == .waitingForSlot ? "Waiting for an available session slot." : "Preparing download metadata.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .padding(14)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    ShimmeringStatusText(
+                        text: emptyItemListStatusText(for: session),
+                        font: .callout,
+                        isAnimated: shouldAnimateEmptyItemListStatus(for: session)
+                    )
+                    .padding(14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 } else {
                     ForEach(sortedItems) { item in
                         SessionItemRow(item: item)
@@ -734,6 +736,32 @@ private struct SessionDetailPane: View {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .stroke(SessionTheme.cardStroke, lineWidth: 1)
             }
+        }
+    }
+
+    private func emptyItemListStatusText(for session: DownloadSession) -> String {
+        switch session.status {
+        case .waitingForSlot:
+            return "Waiting for an available session slot."
+        case .preparing, .checkingDuplicates, .downloading, .waitingForUser:
+            return "Preparing download metadata."
+        case .cancelled:
+            return DownloadSessionStatus.cancelled.displayText
+        case .failed:
+            return session.errorMessage ?? DownloadSessionStatus.failed.displayText
+        case .completed:
+            return DownloadSessionStatus.completed.displayText
+        case .skipped:
+            return DownloadSessionStatus.skipped.displayText
+        }
+    }
+
+    private func shouldAnimateEmptyItemListStatus(for session: DownloadSession) -> Bool {
+        switch session.status {
+        case .waitingForSlot, .preparing, .checkingDuplicates, .waitingForUser, .downloading:
+            return true
+        case .completed, .failed, .cancelled, .skipped:
+            return false
         }
     }
 
