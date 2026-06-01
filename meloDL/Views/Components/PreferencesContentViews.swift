@@ -76,12 +76,12 @@ struct DownloadsPreferencesContent: View {
                 style: style,
                 systemImage: "speedometer",
                 title: "Batch behavior",
-                subtitle: "Choose how aggressively download batches should run."
+                subtitle: "Control how many downloads run at once and how quickly playlists finish."
             ) {
                 PreferencesToggleRow(
                     style: style,
                     title: "Fast downloads",
-                    description: "Run eligible download work with faster defaults.",
+                    description: "Download several playlist tracks at the same time. Turn off to download one track at a time — slower, but easier on your Mac.",
                     isOn: $appSettings.fastDownloads
                 )
 
@@ -91,8 +91,8 @@ struct DownloadsPreferencesContent: View {
                     style: style,
                     title: "Max parallel sessions",
                     description: style == .settings
-                        ? "Higher values can increase CPU use, ffmpeg load, network failures, and platform rate limiting."
-                        : "Limit how many separate sessions can run at once.",
+                        ? "How many pasted links can download at the same time. Raise this to run more downloads together; lower it if your Mac slows down or downloads start failing."
+                        : "How many pasted links can download at the same time.",
                     value: $appSettings.maxParallelSessions,
                     range: 1 ... 10
                 )
