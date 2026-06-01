@@ -876,7 +876,7 @@ private struct SessionItemRow: View {
         case .completed: return "checkmark.circle.fill"
         case .failed: return "xmark.circle.fill"
         case .cancelled: return "slash.circle"
-        case .skipped: return "forward.fill"
+        case .skipped: return "forward.circle"
         }
     }
 

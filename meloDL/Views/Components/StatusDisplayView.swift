@@ -130,7 +130,7 @@ struct DownloadItemRow: View {
             ProgressView()
                 .controlSize(.small)
         case .skipped:
-            Image(systemName: "forward.fill")
+            Image(systemName: "forward.circle")
                 .foregroundStyle(.secondary)
                 .font(.caption)
         case .completed:
