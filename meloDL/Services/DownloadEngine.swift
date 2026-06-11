@@ -99,7 +99,7 @@ final class DownloadEngine {
             let ytdlpPath = await binaryManager.ytdlpPath
             let output = try await runProcess(
                 ytdlpPath,
-                arguments: [url, "--no-playlist", "--print", "%(title)s", "--skip-download", "--no-warnings"]
+                arguments: [url, "--no-playlist", "--print", "%(track,title)s", "--skip-download", "--no-warnings"]
             )
 
             guard output.exitCode == 0 else { return url }
@@ -238,7 +238,7 @@ final class DownloadEngine {
         var arguments = [
             entry.url,
             "--ffmpeg-location", ffmpegPath.path,
-            "--output", "\(outputFolder.path)/%(title)s.%(ext)s",
+            "--output", "\(outputFolder.path)/%(track,title)s.%(ext)s",
             "--print", "after_move:filepath",
             "--no-playlist",
             "--extract-audio",
@@ -285,7 +285,7 @@ final class DownloadEngine {
 
         let output = try await runProcess(
             ytdlpPath,
-            arguments: [url, "--flat-playlist", "--print", "%(title)s\t%(url)s", "--no-warnings"]
+            arguments: [url, "--flat-playlist", "--print", "%(title)s\t%(webpage_url,url)s", "--no-warnings"]
         )
 
         guard output.exitCode == 0 else {
