@@ -7,7 +7,11 @@ import os
 final class DownloadSessionCoordinator: ObservableObject {
     @Published var draftURL = ""
     @Published private(set) var sessions: [DownloadSession] = []
-    @Published var selectedSessionID: UUID?
+    @Published var selectedSessionID: UUID? {
+        didSet {
+            acknowledgeAttentionIfNeeded(forDeselected: oldValue, newSelection: selectedSessionID)
+        }
+    }
     @Published private(set) var isIndexingTracks = false
     @Published var temporaryDownloadFolderPath: String?
 
@@ -104,6 +108,7 @@ final class DownloadSessionCoordinator: ObservableObject {
             session.attentionReason = nil
             session.errorMessage = nil
             session.completedAt = nil
+            session.attentionAcknowledged = false
             for index in session.items.indices where session.items[index].status == .failed || session.items[index].status == .cancelled {
                 session.items[index].status = .queued
                 session.items[index].errorMessage = nil
@@ -130,7 +135,7 @@ final class DownloadSessionCoordinator: ObservableObject {
 
     func clearCompletedSessions() {
         let removableIDs = sessions
-            .filter { $0.status == .completed || $0.status == .skipped || $0.status == .cancelled }
+            .filter { $0.status == .completed || $0.status == .completedWithErrors || $0.status == .skipped || $0.status == .cancelled }
             .map(\.id)
         for id in removableIDs {
             removeSession(id)
@@ -507,9 +512,15 @@ final class DownloadSessionCoordinator: ObservableObject {
                 session.status = .cancelled
                 session.attentionReason = nil
                 session.errorMessage = session.errorMessage ?? "Cancelled"
+            } else if !failedItems.isEmpty && !completedItems.isEmpty {
+                session.status = .completedWithErrors
+                session.attentionReason = .failed
+                session.attentionAcknowledged = false
+                session.errorMessage = "\(failedItems.count) of \(session.downloadableItemCount) failed"
             } else if !failedItems.isEmpty {
                 session.status = .failed
                 session.attentionReason = .failed
+                session.attentionAcknowledged = false
                 session.errorMessage = failedItems.first?.errorMessage
             } else if completedItems.isEmpty && !skippedItems.isEmpty {
                 session.status = .skipped
@@ -523,6 +534,12 @@ final class DownloadSessionCoordinator: ObservableObject {
         guard let session = sessions.first(where: { $0.id == sessionID }) else { return }
         if session.status == .failed {
             notifyIfNeeded(title: "Download failed", body: session.displayTitle)
+        } else if session.status == .completedWithErrors {
+            notifyIfNeeded(
+                title: "Download finished with errors",
+                body: session.partialFailureNotificationBody ?? session.displayTitle
+            )
+            maybeOpenDownloadFolderIfNeeded(session)
         } else if session.status == .completed {
             notifyIfNeeded(title: "Download completed", body: session.displayTitle)
             maybeOpenDownloadFolderIfNeeded(session)
@@ -549,6 +566,7 @@ final class DownloadSessionCoordinator: ObservableObject {
         mutateSession(sessionID) { session in
             session.status = .failed
             session.attentionReason = .failed
+            session.attentionAcknowledged = false
             session.completedAt = Date()
             session.errorMessage = message
         }
@@ -597,6 +615,15 @@ final class DownloadSessionCoordinator: ObservableObject {
                 session.completedAt = Date()
             }
         }
+    }
+
+    private func acknowledgeAttentionIfNeeded(forDeselected previousID: UUID?, newSelection: UUID?) {
+        guard let previousID, previousID != newSelection else { return }
+        guard let index = sessions.firstIndex(where: { $0.id == previousID }) else { return }
+        guard sessions[index].hasDismissableAttention else { return }
+
+        sessions[index].attentionAcknowledged = true
+        persist(sessions[index])
     }
 
     private func mutateItem(sourceURL: String, in sessionID: UUID, mutation: (inout DownloadSessionItem) -> Void) {

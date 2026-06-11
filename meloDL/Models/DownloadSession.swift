@@ -14,6 +14,7 @@ struct DownloadSession: Identifiable, Sendable {
     var format: AudioFormat
     var items: [DownloadSessionItem]
     var errorMessage: String?
+    var attentionAcknowledged: Bool
 
     init(
         id: UUID = UUID(),
@@ -28,7 +29,8 @@ struct DownloadSession: Identifiable, Sendable {
         outputFolderPath: String,
         format: AudioFormat,
         items: [DownloadSessionItem] = [],
-        errorMessage: String? = nil
+        errorMessage: String? = nil,
+        attentionAcknowledged: Bool = false
     ) {
         self.id = id
         self.sourceURL = sourceURL
@@ -43,10 +45,48 @@ struct DownloadSession: Identifiable, Sendable {
         self.format = format
         self.items = items
         self.errorMessage = errorMessage
+        self.attentionAcknowledged = attentionAcknowledged
     }
 
     var needsAttention: Bool {
-        attentionReason != nil || status == .waitingForUser || status == .failed
+        if status == .waitingForUser || attentionReason == .duplicateReview {
+            return true
+        }
+        if status == .failed || status == .completedWithErrors {
+            return !attentionAcknowledged
+        }
+        return false
+    }
+
+    var hasDismissableAttention: Bool {
+        (status == .failed || status == .completedWithErrors) && !attentionAcknowledged
+    }
+
+    var completedItemCount: Int {
+        items.filter { $0.status == .completed }.count
+    }
+
+    var failedItemCount: Int {
+        items.filter { $0.status == .failed }.count
+    }
+
+    var downloadableItemCount: Int {
+        downloadableItems.count
+    }
+
+    var statusSummaryText: String {
+        switch status {
+        case .completedWithErrors:
+            return "Completed (\(failedItemCount) failed)"
+        default:
+            return status.displayText
+        }
+    }
+
+    var partialFailureNotificationBody: String? {
+        guard status == .completedWithErrors else { return nil }
+        let total = downloadableItemCount
+        return "\(completedItemCount)/\(total) downloaded, \(failedItemCount) failed — \(displayTitle)"
     }
 
     var completedFilePaths: [String] {
@@ -115,6 +155,7 @@ enum DownloadSessionStatus: String, Sendable {
     case waitingForUser
     case downloading
     case completed
+    case completedWithErrors
     case failed
     case cancelled
     case skipped
@@ -123,7 +164,7 @@ enum DownloadSessionStatus: String, Sendable {
         switch self {
         case .preparing, .checkingDuplicates, .downloading:
             return true
-        case .waitingForSlot, .waitingForUser, .completed, .failed, .cancelled, .skipped:
+        case .waitingForSlot, .waitingForUser, .completed, .completedWithErrors, .failed, .cancelled, .skipped:
             return false
         }
     }
@@ -136,6 +177,7 @@ enum DownloadSessionStatus: String, Sendable {
         case .waitingForUser: return "Needs review"
         case .downloading: return "Downloading"
         case .completed: return "Completed"
+        case .completedWithErrors: return "Completed with errors"
         case .failed: return "Failed"
         case .cancelled: return "Cancelled"
         case .skipped: return "Skipped"

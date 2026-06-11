@@ -25,7 +25,7 @@ actor DownloadSessionStore {
         let itemsBySession = try fetchItemsBySession()
         let sql = """
         SELECT id, source_url, kind, display_title, resolved_title, status, attention_reason,
-               created_at, completed_at, output_folder_path, format, error_message
+               created_at, completed_at, output_folder_path, format, error_message, attention_acknowledged
         FROM sessions
         ORDER BY created_at DESC;
         """
@@ -51,6 +51,7 @@ actor DownloadSessionStore {
             let outputFolderPath = sqliteText(statement, column: 9)
             let format = AudioFormat(rawValue: sqliteText(statement, column: 10)) ?? .mp3
             let errorMessage = sqliteOptionalText(statement, column: 11)
+            let attentionAcknowledged = sqlite3_column_int(statement, 12) != 0
 
             sessions.append(
                 DownloadSession(
@@ -66,7 +67,8 @@ actor DownloadSessionStore {
                     outputFolderPath: outputFolderPath,
                     format: format,
                     items: itemsBySession[id] ?? [],
-                    errorMessage: errorMessage
+                    errorMessage: errorMessage,
+                    attentionAcknowledged: attentionAcknowledged
                 )
             )
         }
@@ -154,7 +156,8 @@ actor DownloadSessionStore {
             completed_at REAL,
             output_folder_path TEXT NOT NULL,
             format TEXT NOT NULL,
-            error_message TEXT
+            error_message TEXT,
+            attention_acknowledged INTEGER NOT NULL DEFAULT 0
         );
         """)
 
@@ -183,6 +186,11 @@ actor DownloadSessionStore {
             column: "had_duplicate_match",
             definition: "INTEGER NOT NULL DEFAULT 0"
         )
+        try addColumnIfNotExists(
+            table: "sessions",
+            column: "attention_acknowledged",
+            definition: "INTEGER NOT NULL DEFAULT 0"
+        )
         try execute(sql: """
         UPDATE session_items
         SET had_duplicate_match = 1
@@ -204,9 +212,9 @@ actor DownloadSessionStore {
         let sql = """
         INSERT OR REPLACE INTO sessions (
             id, source_url, kind, display_title, resolved_title, status, attention_reason,
-            created_at, completed_at, output_folder_path, format, error_message
+            created_at, completed_at, output_folder_path, format, error_message, attention_acknowledged
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """
         var statement: OpaquePointer?
         defer { sqlite3_finalize(statement) }
@@ -227,6 +235,7 @@ actor DownloadSessionStore {
         bindText(statement, 10, session.outputFolderPath)
         bindText(statement, 11, session.format.rawValue)
         bindOptionalText(statement, 12, session.errorMessage)
+        sqlite3_bind_int(statement, 13, session.attentionAcknowledged ? 1 : 0)
 
         guard sqlite3_step(statement) == SQLITE_DONE else {
             throw makeError(message: "Failed to upsert session")

@@ -529,16 +529,16 @@ private struct SessionSidebarRow: View {
 
     private var subtitle: String {
         if session.kind == .playlist, let progress = session.downloadableProgress {
-            return "\(session.status.displayText) - \(progress.current)/\(progress.total)"
+            return "\(session.statusSummaryText) - \(progress.current)/\(progress.total)"
         }
-        return session.status.displayText
+        return session.statusSummaryText
     }
 
     private var shouldAnimateStatus: Bool {
         switch session.status {
         case .waitingForSlot, .preparing, .checkingDuplicates, .waitingForUser, .downloading:
             return true
-        case .completed, .failed, .cancelled, .skipped:
+        case .completed, .completedWithErrors, .failed, .cancelled, .skipped:
             return false
         }
     }
@@ -550,6 +550,7 @@ private struct SessionSidebarRow: View {
         case .waitingForUser: return "exclamationmark.circle"
         case .downloading: return "arrow.down.circle"
         case .completed: return "checkmark.circle"
+        case .completedWithErrors: return "exclamationmark.triangle"
         case .failed: return "xmark.circle"
         case .cancelled: return "slash.circle"
         case .skipped: return "forward.circle"
@@ -559,7 +560,7 @@ private struct SessionSidebarRow: View {
     private var iconColor: Color {
         switch session.status {
         case .completed: return .green
-        case .failed, .waitingForUser: return .orange
+        case .completedWithErrors, .failed, .waitingForUser: return .orange
         default: return .secondary
         }
     }
@@ -643,7 +644,7 @@ private struct SessionDetailPane: View {
                     .meloBorderedButton(destructive: true)
                 }
 
-                if session.status == .failed || session.status == .cancelled {
+                if session.status == .failed || session.status == .completedWithErrors || session.status == .cancelled {
                     Button("Retry") {
                         coordinator.retrySession(session.id)
                     }
@@ -781,6 +782,8 @@ private struct SessionDetailPane: View {
             return DownloadSessionStatus.cancelled.displayText
         case .failed:
             return session.errorMessage ?? DownloadSessionStatus.failed.displayText
+        case .completedWithErrors:
+            return session.statusSummaryText
         case .completed:
             return DownloadSessionStatus.completed.displayText
         case .skipped:
@@ -792,7 +795,7 @@ private struct SessionDetailPane: View {
         switch session.status {
         case .waitingForSlot, .preparing, .checkingDuplicates, .waitingForUser, .downloading:
             return true
-        case .completed, .failed, .cancelled, .skipped:
+        case .completed, .completedWithErrors, .failed, .cancelled, .skipped:
             return false
         }
     }
