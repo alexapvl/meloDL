@@ -583,16 +583,26 @@ private struct SessionDetailPane: View {
         if let session {
             let reviewItem = coordinator.currentDuplicateReviewItem(for: session.id)
             ZStack {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 24) {
-                        header(for: session)
+                VStack(spacing: 0) {
+                    header(for: session)
+                        .frame(maxWidth: SessionLayout.detailContentMaxWidth, alignment: .leading)
+                        .frame(maxWidth: .infinity, alignment: .top)
+                        .padding(.horizontal, 46)
+                        .padding(.top, 52)
+                        .padding(.bottom, 20)
+                        .background(SessionTheme.contentBackground)
+
+                    Divider()
+                        .overlay(SessionTheme.rowDivider)
+
+                    ScrollView {
                         itemList(for: session)
+                            .frame(maxWidth: SessionLayout.detailContentMaxWidth, alignment: .leading)
+                            .frame(maxWidth: .infinity, alignment: .top)
+                            .padding(.horizontal, 46)
+                            .padding(.top, 20)
+                            .padding(.bottom, 32)
                     }
-                    .frame(maxWidth: SessionLayout.detailContentMaxWidth, alignment: .leading)
-                    .frame(maxWidth: .infinity, alignment: .top)
-                    .padding(.horizontal, 46)
-                    .padding(.top, 52)
-                    .padding(.bottom, 32)
                 }
                 .blur(radius: reviewItem == nil ? 0 : 7)
                 .disabled(reviewItem != nil)
