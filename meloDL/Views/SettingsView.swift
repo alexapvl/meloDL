@@ -681,6 +681,28 @@ struct IndexingSettingsView: View {
                         }
                     }
 
+                    SettingsSection(title: "Rekordbox Library") {
+                        SettingsRow(
+                            title: "Collection import",
+                            description: rekordboxSectionDescription
+                        ) {
+                            HStack(spacing: 8) {
+                                Button("Import Rekordbox XML...") {
+                                    viewModel.importRekordboxXMLUsingPanel()
+                                }
+                                .meloBorderedButton()
+                                .disabled(viewModel.isIndexing)
+
+                                if viewModel.isRekordboxAssistActive {
+                                    Button("Clear Import") {
+                                        viewModel.clearRekordboxImport()
+                                    }
+                                    .meloBorderedButton()
+                                }
+                            }
+                        }
+                    }
+
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -745,6 +767,13 @@ struct IndexingSettingsView: View {
                 viewModel.reindexAfterDuplicateFinderClosed()
             }
         }
+    }
+
+    private var rekordboxSectionDescription: String {
+        if let status = viewModel.rekordboxIndexingStatusText {
+            return status
+        }
+        return "In Rekordbox, go to File -> Export collection in xml format, then import that XML here."
     }
 
     private var lastIndexedText: String {
@@ -1142,29 +1171,6 @@ private struct ExactDuplicateFinderSheet: View {
                     || viewModel.isRunningSmartCleanup
                     || viewModel.isIndexing
                 )
-
-                Menu("Tools") {
-                    Button("Refresh Scan") {
-                        viewModel.refreshExactDuplicateGroups()
-                    }
-                    .disabled(viewModel.isScanningExactDuplicates || viewModel.isRunningSmartCleanup)
-
-                    Divider()
-
-                    Button("Import Rekordbox XML...") {
-                        viewModel.importRekordboxXMLUsingPanel()
-                    }
-                    .disabled(viewModel.isScanningExactDuplicates || viewModel.isRunningSmartCleanup)
-
-                    if viewModel.isRekordboxAssistActive {
-                        Button("Clear Rekordbox Import") {
-                            viewModel.clearRekordboxImport()
-                        }
-                        .disabled(viewModel.isRunningSmartCleanup)
-                    }
-                }
-                .focusable(false)
-                .disabled(viewModel.isRunningSmartCleanup)
             }
 
             Spacer(minLength: 0)

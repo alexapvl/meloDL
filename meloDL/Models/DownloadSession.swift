@@ -125,6 +125,10 @@ struct DownloadSession: Identifiable, Sendable {
         items.filter { $0.status == .waitingForUser && $0.duplicateMatch != nil }.count
     }
 
+    var hasPendingDuplicateReview: Bool {
+        duplicateReviewRemaining > 0
+    }
+
     var duplicateReviewPosition: Int {
         let total = duplicateReviewTotal
         guard total > 0 else { return 1 }

@@ -31,9 +31,14 @@ struct DuplicateReviewCard: View {
                 Text("Matched Track")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Text(item.match.candidateTitle)
-                    .font(.body.weight(.medium))
-                    .lineLimit(2)
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(item.match.candidateTitle)
+                        .font(.body.weight(.medium))
+                        .lineLimit(2)
+                    if item.isMatchInRekordbox {
+                        rekordboxMatchTag
+                    }
+                }
                 Text(item.match.candidatePath)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -104,6 +109,14 @@ struct DuplicateReviewCard: View {
             persistentOffset = 0
             isCommitAnimating = false
         }
+    }
+
+    private var rekordboxMatchTag: some View {
+        Text("Found in Rekordbox")
+            .font(.caption2.weight(.semibold))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(Color.accentColor.opacity(0.16), in: Capsule())
     }
 
     @ViewBuilder

@@ -44,7 +44,7 @@ final class IndexingSettingsViewModel: ObservableObject {
     private let indexer: TrackIndexer
     private let duplicateDetectionService: DuplicateDetectionService
     private let rekordboxImportService: RekordboxXMLImportService
-    private var rekordboxCanonicalPaths: Set<String> = []
+    private let rekordboxLibraryStore: RekordboxLibraryStore
     private var pollingTask: Task<Void, Never>?
     private var pollingGeneration = 0
     private var activeIndexingRequests = 0
@@ -56,17 +56,21 @@ final class IndexingSettingsViewModel: ObservableObject {
         store: TrackIndexStore = .shared,
         indexer: TrackIndexer = .shared,
         duplicateDetectionService: DuplicateDetectionService = .shared,
-        rekordboxImportService: RekordboxXMLImportService = .shared
+        rekordboxImportService: RekordboxXMLImportService = .shared,
+        rekordboxLibraryStore: RekordboxLibraryStore = .shared
     ) {
         self.appSettings = appSettings
         self.store = store
         self.indexer = indexer
         self.duplicateDetectionService = duplicateDetectionService
         self.rekordboxImportService = rekordboxImportService
+        self.rekordboxLibraryStore = rekordboxLibraryStore
+        syncRekordboxPublishedState()
     }
 
     func onAppear() {
         syncRootsFromSettings()
+        syncRekordboxPublishedState()
         Task {
             await refreshSnapshot()
             startActivityPollingIfNeeded()
@@ -160,26 +164,23 @@ final class IndexingSettingsViewModel: ObservableObject {
         Task {
             do {
                 let snapshot = try await rekordboxImportService.importSnapshot(from: fileURL)
-                rekordboxCanonicalPaths = snapshot.canonicalPaths
-                rekordboxImportedTrackCount = snapshot.trackCount
-                rekordboxSourceFilename = snapshot.sourceURL.lastPathComponent
+                try rekordboxLibraryStore.apply(snapshot: snapshot)
+                syncRekordboxPublishedState()
                 if isManualReviewMode {
                     refreshManualQueueFromCurrentGroups()
                 }
             } catch {
-                rekordboxCanonicalPaths = []
-                rekordboxImportedTrackCount = 0
-                rekordboxSourceFilename = nil
                 rekordboxImportError = error.localizedDescription
+                try? rekordboxLibraryStore.clear()
+                syncRekordboxPublishedState()
             }
         }
     }
 
     func clearRekordboxImport() {
-        rekordboxCanonicalPaths = []
-        rekordboxImportedTrackCount = 0
-        rekordboxSourceFilename = nil
         rekordboxImportError = nil
+        try? rekordboxLibraryStore.clear()
+        syncRekordboxPublishedState()
         if isManualReviewMode {
             refreshManualQueueFromCurrentGroups()
         }
@@ -518,7 +519,7 @@ final class IndexingSettingsViewModel: ObservableObject {
     }
 
     var isRekordboxAssistActive: Bool {
-        !rekordboxCanonicalPaths.isEmpty
+        rekordboxLibraryStore.isActive
     }
 
     var rekordboxStatusText: String? {
@@ -536,6 +537,19 @@ final class IndexingSettingsViewModel: ObservableObject {
             number: .decimal
         )
         return "Rekordbox: \(trackCountText) tracks loaded, \(autoResolvableGroupsText) groups can be auto-resolved with Smart Cleanup (\(source))."
+    }
+
+    var rekordboxIndexingStatusText: String? {
+        if let rekordboxImportError {
+            return "Rekordbox import failed: \(rekordboxImportError)"
+        }
+        guard isRekordboxAssistActive else { return nil }
+        let source = rekordboxSourceFilename ?? "XML"
+        let trackCountText = NumberFormatter.localizedString(
+            from: NSNumber(value: rekordboxImportedTrackCount),
+            number: .decimal
+        )
+        return "\(trackCountText) tracks loaded from \(source). Used during download duplicate review and duplicate cleanup."
     }
 
     private var autoResolvableGroupCount: Int {
@@ -783,8 +797,12 @@ final class IndexingSettingsViewModel: ObservableObject {
     }
 
     private func isInRekordboxLibrary(path: String) -> Bool {
-        guard !rekordboxCanonicalPaths.isEmpty else { return false }
-        return rekordboxCanonicalPaths.contains(TrackIndexStore.canonicalize(path: path))
+        rekordboxLibraryStore.contains(path: path)
+    }
+
+    private func syncRekordboxPublishedState() {
+        rekordboxImportedTrackCount = rekordboxLibraryStore.trackCount
+        rekordboxSourceFilename = rekordboxLibraryStore.sourceFilename
     }
 
     private func moveToNextManualGroup() {

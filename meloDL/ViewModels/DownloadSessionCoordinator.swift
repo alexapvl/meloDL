@@ -18,6 +18,7 @@ final class DownloadSessionCoordinator: ObservableObject {
     private let appSettings: AppSettings
     private let sessionStore: DownloadSessionStore
     private let duplicateDetectionService: DuplicateDetectionService
+    private let rekordboxLibraryStore: RekordboxLibraryStore
     private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "com.alexapvl.meloDL", category: "DownloadSessionCoordinator")
     private var activeTasks: [UUID: Task<Void, Never>] = [:]
     private var activeEngines: [UUID: DownloadEngine] = [:]
@@ -28,11 +29,13 @@ final class DownloadSessionCoordinator: ObservableObject {
     init(
         appSettings: AppSettings,
         sessionStore: DownloadSessionStore = .shared,
-        duplicateDetectionService: DuplicateDetectionService = .shared
+        duplicateDetectionService: DuplicateDetectionService = .shared,
+        rekordboxLibraryStore: RekordboxLibraryStore = .shared
     ) {
         self.appSettings = appSettings
         self.sessionStore = sessionStore
         self.duplicateDetectionService = duplicateDetectionService
+        self.rekordboxLibraryStore = rekordboxLibraryStore
     }
 
     var selectedSession: DownloadSession? {
@@ -152,7 +155,8 @@ final class DownloadSessionCoordinator: ObservableObject {
             source: session.kind == .playlist ? .playlist(url: item.sourceURL) : .single(url: item.sourceURL),
             incomingTitle: item.title,
             incomingURL: item.sourceURL,
-            match: match.duplicateMatch
+            match: match.duplicateMatch,
+            isMatchInRekordbox: rekordboxLibraryStore.contains(path: match.candidatePath)
         )
     }
 
@@ -271,7 +275,9 @@ final class DownloadSessionCoordinator: ObservableObject {
 
         for id in waitingIDs {
             guard activeSessionCount < cap else { return }
-            let shouldSkipDuplicateCheck = sessions.first(where: { $0.id == id })?.items.isEmpty == false
+            guard let session = sessions.first(where: { $0.id == id }) else { continue }
+            guard !session.hasPendingDuplicateReview else { continue }
+            let shouldSkipDuplicateCheck = !session.items.isEmpty
             startSession(id, skipDuplicateCheck: shouldSkipDuplicateCheck)
         }
     }
@@ -300,7 +306,7 @@ final class DownloadSessionCoordinator: ObservableObject {
         let entries: [PlaylistEntry]
         if skipDuplicateCheck, !initialSession.items.isEmpty {
             entries = initialSession.items
-                .filter { $0.status == .queued || $0.status == .waitingForUser }
+                .filter { $0.status == .queued }
                 .map { PlaylistEntry(url: $0.sourceURL, title: $0.title) }
         } else {
             entries = await engine.prefetchEntries(from: sourceURL)
@@ -333,11 +339,23 @@ final class DownloadSessionCoordinator: ObservableObject {
             return
         }
 
-        await startDownloadPhase(sessionID, engine: engine, entries: entries.filter { entry in
-            guard let session = sessions.first(where: { $0.id == sessionID }) else { return false }
+        guard let session = sessions.first(where: { $0.id == sessionID }) else { return }
+        guard !session.hasPendingDuplicateReview else {
+            mutateSession(sessionID) { session in
+                session.status = .waitingForUser
+                session.attentionReason = .duplicateReview
+            }
+            activeTasks[sessionID] = nil
+            activeEngines[sessionID] = nil
+            scheduleWaitingSessions()
+            return
+        }
+
+        let queuedEntries = entries.filter { entry in
             guard let item = session.items.first(where: { $0.sourceURL == entry.url }) else { return true }
-            return item.status != .skipped
-        })
+            return item.status == .queued
+        }
+        await startDownloadPhase(sessionID, engine: engine, entries: queuedEntries)
     }
 
     private func applyResolvedEntries(_ entries: [PlaylistEntry], to sessionID: UUID) {
@@ -417,11 +435,14 @@ final class DownloadSessionCoordinator: ObservableObject {
             return
         }
 
+        guard let session = sessions.first(where: { $0.id == sessionID }) else { return }
+
+        let config = downloadConfiguration(for: session)
+
         mutateSession(sessionID) { session in
             session.status = .downloading
             session.attentionReason = nil
-            for index in session.items.indices where session.items[index].status == .queued || session.items[index].status == .waitingForUser {
-                session.items[index].status = .queued
+            for index in session.items.indices where session.items[index].status == .queued {
                 session.items[index].duplicateMatch = nil
             }
         }
@@ -431,7 +452,7 @@ final class DownloadSessionCoordinator: ObservableObject {
                 let entry = entries[0]
                 let stream = engine.download(
                     url: entry.url,
-                    config: appSettings.downloadConfiguration,
+                    config: config,
                     audioSettings: appSettings.audioSettings,
                     preloadedTitle: entry.title,
                     deferTitleResolution: false
@@ -441,8 +462,8 @@ final class DownloadSessionCoordinator: ObservableObject {
                 }
             } else {
                 let stream = engine.downloadPlaylist(
-                    url: sessions.first(where: { $0.id == sessionID })?.sourceURL ?? entries[0].url,
-                    config: appSettings.downloadConfiguration,
+                    url: session.sourceURL,
+                    config: config,
                     audioSettings: appSettings.audioSettings,
                     prefetchedEntries: entries
                 )
@@ -651,6 +672,13 @@ final class DownloadSessionCoordinator: ObservableObject {
                 logger.error("Failed to persist session: \(error.localizedDescription)")
             }
         }
+    }
+
+    private func downloadConfiguration(for session: DownloadSession) -> DownloadConfiguration {
+        DownloadConfiguration(
+            fastDownloads: appSettings.fastDownloads,
+            outputFolder: URL(fileURLWithPath: session.outputFolderPath, isDirectory: true)
+        )
     }
 
     private func maybeOpenDownloadFolderIfNeeded(_ session: DownloadSession) {

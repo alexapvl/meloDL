@@ -42,19 +42,22 @@ struct DuplicateReviewItem: Identifiable, Sendable {
     let incomingTitle: String
     let incomingURL: String
     let match: DuplicateMatch
+    let isMatchInRekordbox: Bool
 
     init(
         id: UUID = UUID(),
         source: Source,
         incomingTitle: String,
         incomingURL: String,
-        match: DuplicateMatch
+        match: DuplicateMatch,
+        isMatchInRekordbox: Bool = false
     ) {
         self.id = id
         self.source = source
         self.incomingTitle = incomingTitle
         self.incomingURL = incomingURL
         self.match = match
+        self.isMatchInRekordbox = isMatchInRekordbox
     }
 }
 
