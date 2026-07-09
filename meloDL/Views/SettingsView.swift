@@ -12,6 +12,9 @@ struct SettingsView: View {
     #endif
     @State private var selection: SettingsDestination = .downloads
     @State private var isBackButtonHovered = false
+    @State private var pendingDestination: SettingsDestination?
+    @State private var showLeaveDuplicatesDialog = false
+    @StateObject private var indexingViewModel: IndexingSettingsViewModel
     @Environment(\.controlActiveState) private var controlActiveState
 
     init(
@@ -23,6 +26,7 @@ struct SettingsView: View {
         self.updater = updater
         self.appSettings = appSettings
         self.onDismiss = onDismiss
+        _indexingViewModel = StateObject(wrappedValue: IndexingSettingsViewModel(appSettings: appSettings))
         #if DEBUG
         self.onReplayOnboarding = onReplayOnboarding ?? {}
         #endif
@@ -44,66 +48,107 @@ struct SettingsView: View {
                 .frame(width: 0, height: 0)
         }
         .frame(minWidth: 820, idealWidth: 900, minHeight: 600, idealHeight: 640)
+        .onAppear { indexingViewModel.onAppear() }
+        .onDisappear { indexingViewModel.onDisappear() }
         .onExitCommand(perform: onDismiss)
+        .confirmationDialog(
+            "Leave manual review?",
+            isPresented: $showLeaveDuplicatesDialog,
+            titleVisibility: .visible
+        ) {
+            Button("Apply Session", role: .destructive) {
+                Task {
+                    await indexingViewModel.confirmManualReviewSessionAsync()
+                    completePendingNavigation()
+                }
+            }
+            Button("Discard Changes", role: .destructive) {
+                indexingViewModel.cancelManualReviewSession()
+                completePendingNavigation()
+            }
+            Button("Continue Reviewing", role: .cancel) {
+                pendingDestination = nil
+            }
+        } message: {
+            Text("You have staged cleanup actions. Apply them before leaving, discard them, or continue reviewing.")
+        }
+    }
+
+    private func completePendingNavigation() {
+        guard let destination = pendingDestination else { return }
+        pendingDestination = nil
+        if selection == .duplicates && destination != .duplicates {
+            indexingViewModel.onDuplicatesPageDisappeared()
+        }
+        commitSelection(destination)
+    }
+
+    private func selectDestination(_ destination: SettingsDestination) {
+        guard destination != selection else { return }
+
+        if selection == .duplicates && destination != .duplicates {
+            if indexingViewModel.requiresLeaveDuplicatesConfirmation {
+                pendingDestination = destination
+                showLeaveDuplicatesDialog = true
+                return
+            }
+            indexingViewModel.onDuplicatesPageDisappeared()
+        }
+
+        commitSelection(destination)
+    }
+
+    private func commitSelection(_ destination: SettingsDestination) {
+        selection = destination
+        if destination == .duplicates {
+            indexingViewModel.onDuplicatesPageAppeared()
+        }
     }
 
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 3) {
-            ForEach(SettingsDestination.allCases, id: \.self) { destination in
-                SettingsSidebarRow(
-                    destination: destination,
-                    isSelected: selection == destination
-                ) {
-                    selection = destination
+            VStack(alignment: .leading, spacing: 3) {
+                ForEach(SettingsDestination.allCases, id: \.self) { destination in
+                    SettingsSidebarRow(
+                        destination: destination,
+                        isSelected: selection == destination
+                    ) {
+                        selectDestination(destination)
+                    }
                 }
             }
+            .padding(.horizontal, 6)
 
             Spacer(minLength: 0)
 
             sidebarFooter
         }
         .padding(.top, SettingsLayout.sidebarContentTopInset)
-        .padding(.horizontal, 6)
-        .padding(.bottom, SettingsLayout.sidebarContentBottomPadding)
+        .padding(.bottom, SettingsLayout.sidebarBottomPadding)
         .frame(width: SettingsLayout.sidebarWidth)
         .frame(maxHeight: .infinity, alignment: .topLeading)
         .background(sidebarBackground)
         .ignoresSafeArea(.container, edges: .top)
     }
 
-    private var sidebarBackground: Color {
-        controlActiveState == .inactive
-            ? SettingsTheme.sidebarInactiveBackground
-            : SettingsTheme.sidebarActiveBackground
-    }
-
     private var sidebarFooter: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Divider()
-                .overlay(SettingsTheme.rowDivider)
-
+        SidebarFooterSection {
             Button(action: onDismiss) {
-                HStack(spacing: 10) {
-                    Image(systemName: "arrow.left")
-                        .font(.system(size: 15, weight: .regular))
-                        .frame(width: 18)
-                    Text("Back to app")
-                    Spacer(minLength: 0)
-                }
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 7)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(.rect)
+                SidebarFooterButtonLabel(
+                    title: "Back to app",
+                    systemImage: "arrow.left",
+                    isHovered: isBackButtonHovered
+                )
             }
             .buttonStyle(.plain)
-            .background(backButtonFill, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             .onHover { isBackButtonHovered = $0 }
         }
     }
 
-    private var backButtonFill: Color {
-        isBackButtonHovered ? Color.primary.opacity(0.08) : .clear
+    private var sidebarBackground: Color {
+        controlActiveState == .inactive
+            ? SettingsTheme.sidebarInactiveBackground
+            : SettingsTheme.sidebarActiveBackground
     }
 
     @ViewBuilder
@@ -114,7 +159,9 @@ struct SettingsView: View {
         case .behavior:
             BehaviorSettingsView(appSettings: appSettings)
         case .indexing:
-            IndexingSettingsView(appSettings: appSettings)
+            IndexingSettingsView(appSettings: appSettings, viewModel: indexingViewModel)
+        case .duplicates:
+            DuplicatesSettingsView(viewModel: indexingViewModel)
         case .updates:
             UpdateSettingsView(updater: updater)
         case .about:
@@ -182,6 +229,7 @@ private enum SettingsDestination: CaseIterable {
     case downloads
     case behavior
     case indexing
+    case duplicates
     case updates
     case about
     case credits
@@ -195,6 +243,7 @@ private enum SettingsDestination: CaseIterable {
         case .downloads: return "Downloads"
         case .behavior: return "Behavior"
         case .indexing: return "Indexing"
+        case .duplicates: return "Duplicates"
         case .updates: return "Updates"
         case .about: return "About"
         case .credits: return "Credits"
@@ -210,9 +259,10 @@ private enum SettingsDestination: CaseIterable {
         case .downloads: return "arrow.down.circle"
         case .behavior: return "switch.2"
         case .indexing: return "magnifyingglass"
+        case .duplicates: return "doc.on.doc"
         case .updates: return "arrow.triangle.2.circlepath"
         case .about: return "info.circle"
-        case .credits: return "person.3"
+        case .credits: return "heart.text.square"
         case .support: return "lifepreserver"
         #if DEBUG
         case .debug: return "hammer"
@@ -227,7 +277,8 @@ private enum SettingsLayout {
     static let pageBottomPadding: CGFloat = 28
     static let sidebarWidth: CGFloat = 230
     static let sidebarContentTopInset: CGFloat = 64
-    static let sidebarContentBottomPadding: CGFloat = 12
+    static let sidebarBottomPadding: CGFloat = 12
+
     static let pageSpacing: CGFloat = 34
     static let sectionSpacing: CGFloat = 12
     static let rowSpacing: CGFloat = 0
@@ -615,99 +666,89 @@ struct BehaviorSettingsView: View {
 
 struct IndexingSettingsView: View {
     @ObservedObject var appSettings: AppSettings
-    @StateObject private var viewModel: IndexingSettingsViewModel
+    @ObservedObject var viewModel: IndexingSettingsViewModel
     @State private var dropTargeted = false
-
-    init(appSettings: AppSettings) {
-        self.appSettings = appSettings
-        _viewModel = StateObject(wrappedValue: IndexingSettingsViewModel(appSettings: appSettings))
-    }
 
     var body: some View {
         SettingsPage(title: "Indexing", subtitle: "Configure duplicate detection indexing roots and maintenance.") {
             VStack(alignment: .leading, spacing: SettingsLayout.pageSpacing) {
-                    DuplicateDetectionPreferencesSection(
-                        appSettings: appSettings,
-                        style: .settings,
-                        scanAction: viewModel.openExactDuplicateFinder,
-                        isScanDisabled: viewModel.roots.isEmpty || viewModel.isIndexing
-                    )
+                DuplicateDetectionPreferencesSection(
+                    appSettings: appSettings,
+                    style: .settings
+                )
 
-                    IndexedFoldersPreferencesSection(
-                        style: .settings,
-                        roots: viewModel.roots,
-                        rootTrackCounts: viewModel.indexedTrackCountsByRoot,
-                        selectedRoot: $viewModel.selectedRoot,
-                        dropTargeted: $dropTargeted,
-                        isDisabled: viewModel.isIndexing,
-                        onAdd: viewModel.addRootUsingPanel,
-                        onRemove: viewModel.removeRoot,
-                        onDropProviders: handleDrop(providers:)
-                    )
+                IndexedFoldersPreferencesSection(
+                    style: .settings,
+                    roots: viewModel.roots,
+                    rootTrackCounts: viewModel.indexedTrackCountsByRoot,
+                    selectedRoot: $viewModel.selectedRoot,
+                    dropTargeted: $dropTargeted,
+                    isDisabled: viewModel.isIndexing,
+                    onAdd: viewModel.addRootUsingPanel,
+                    onRemove: viewModel.removeRoot,
+                    onDropProviders: handleDrop(providers:)
+                )
 
-                    SettingsSection(title: "Index Status") {
-                        SettingsRow(
-                            title: viewModel.isIndexing ? "Indexing..." : "Idle",
-                            description: indexStatusDescription
-                        ) {
-                            if viewModel.isIndexing {
-                                ProgressView()
-                                    .controlSize(.small)
-                            } else {
-                                Image(systemName: "checkmark.circle")
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-
-                        SettingsDivider()
-
-                        SettingsRow(
-                            title: "Maintenance",
-                            description: "Update the index or clear cached indexing data."
-                        ) {
-                            HStack(spacing: 8) {
-                                Button("Update index now") {
-                                    viewModel.updateIndexNow()
-                                }
-                                .meloBorderedButton()
-                                .disabled(!viewModel.canUpdateIndexNow)
-
-                                Button("Clear indexing data...") {
-                                    viewModel.showClearDataConfirmation = true
-                                }
-                                .meloBorderedButton(destructive: true)
-                                .disabled(viewModel.isIndexing)
-                            }
+                SettingsSection(title: "Index Status") {
+                    SettingsRow(
+                        title: viewModel.isIndexing ? "Indexing..." : "Idle",
+                        description: indexStatusDescription
+                    ) {
+                        if viewModel.isIndexing {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Image(systemName: "checkmark.circle")
+                                .foregroundStyle(.secondary)
                         }
                     }
 
-                    SettingsSection(title: "Rekordbox Library") {
-                        SettingsRow(
-                            title: "Collection import",
-                            description: rekordboxSectionDescription
-                        ) {
-                            HStack(spacing: 8) {
-                                Button("Import Rekordbox XML...") {
-                                    viewModel.importRekordboxXMLUsingPanel()
+                    SettingsDivider()
+
+                    SettingsRow(
+                        title: "Maintenance",
+                        description: "Update the index or clear cached indexing data."
+                    ) {
+                        HStack(spacing: 8) {
+                            Button("Update index now") {
+                                viewModel.updateIndexNow()
+                            }
+                            .meloBorderedButton()
+                            .disabled(!viewModel.canUpdateIndexNow)
+
+                            Button("Clear indexing data...") {
+                                viewModel.showClearDataConfirmation = true
+                            }
+                            .meloBorderedButton(destructive: true)
+                            .disabled(viewModel.isIndexing)
+                        }
+                    }
+                }
+
+                SettingsSection(title: "Rekordbox Library") {
+                    SettingsRow(
+                        title: "Collection import",
+                        description: rekordboxSectionDescription
+                    ) {
+                        HStack(spacing: 8) {
+                            Button("Import Rekordbox XML...") {
+                                viewModel.importRekordboxXMLUsingPanel()
+                            }
+                            .meloBorderedButton()
+                            .disabled(viewModel.isIndexing)
+
+                            if viewModel.isRekordboxAssistActive {
+                                Button("Clear Import") {
+                                    viewModel.clearRekordboxImport()
                                 }
                                 .meloBorderedButton()
-                                .disabled(viewModel.isIndexing)
-
-                                if viewModel.isRekordboxAssistActive {
-                                    Button("Clear Import") {
-                                        viewModel.clearRekordboxImport()
-                                    }
-                                    .meloBorderedButton()
-                                }
                             }
                         }
                     }
-
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .onAppear { viewModel.onAppear() }
-        .onDisappear { viewModel.onDisappear() }
         .alert("Clear indexing data?", isPresented: $viewModel.showClearDataConfirmation) {
             Button("Cancel", role: .cancel) {}
             Button("Clear Data", role: .destructive) {
@@ -757,14 +798,6 @@ struct IndexingSettingsView: View {
                 Text("\"\(proposedRoot)\" contains currently indexed child folders: \(childRoots.joined(separator: ", ")).")
             case .none:
                 Text("")
-            }
-        }
-        .sheet(isPresented: $viewModel.showExactDuplicateFinder) {
-            ExactDuplicateFinderSheet(viewModel: viewModel)
-        }
-        .onChange(of: viewModel.showExactDuplicateFinder) { wasPresented, isPresented in
-            if wasPresented && !isPresented {
-                viewModel.reindexAfterDuplicateFinderClosed()
             }
         }
     }
@@ -823,127 +856,71 @@ struct IndexingSettingsView: View {
     }
 }
 
-private struct ExactDuplicateFinderSheet: View {
+private struct DuplicatesSettingsView: View {
     @ObservedObject var viewModel: IndexingSettingsViewModel
-    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Exact Duplicate Files")
-                        .font(.title3.bold())
-                    Text("\(viewModel.exactDuplicateGroups.count) groups, \(viewModel.totalExactDuplicateFiles) files")
-                        .font(.caption)
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Duplicates")
+                        .font(.system(size: 28, weight: .bold))
+                    Text("\(viewModel.exactDuplicateGroups.count) groups, \(viewModel.totalExactDuplicateFiles) files in your indexed library.")
+                        .font(.title3)
                         .foregroundStyle(.secondary)
                 }
-                Spacer(minLength: 0)
-            }
 
-            if viewModel.isScanningExactDuplicates || viewModel.isRunningSmartCleanup {
-                ProgressView(viewModel.isRunningSmartCleanup ? "Running smart cleanup..." : "Scanning indexed files...")
-                    .controlSize(.small)
-            } else if let exactDuplicateScanError = viewModel.exactDuplicateScanError {
-                Text(exactDuplicateScanError)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-            }
-
-            if let smartCleanupSummary = viewModel.smartCleanupSummary {
-                Text(cleanupSummaryText(for: smartCleanupSummary))
-                    .font(.caption)
-                    .foregroundStyle(smartCleanupSummary.failedCount > 0 ? .orange : .secondary)
-            }
-
-            if let smartCleanupUndoToast = viewModel.smartCleanupUndoToast {
-                smartCleanupUndoToastView(smartCleanupUndoToast)
-            }
-
-            if let rekordboxStatusText = viewModel.rekordboxStatusText {
-                Text(rekordboxStatusText)
-                    .font(.caption)
-                    .foregroundStyle(viewModel.isRekordboxAssistActive ? Color.primary : Color.red)
-            }
-
-            if !viewModel.isManualReviewMode && !viewModel.isRekordboxAssistActive {
-                Text("Rekordbox users: In Rekordbox, go to File -> Export collection in xml format, then import that XML here.")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-
-            if !viewModel.isScanningExactDuplicates && !viewModel.isRunningSmartCleanup {
-                if viewModel.exactDuplicateGroups.isEmpty {
-                    ContentUnavailableView(
-                        "No Exact Duplicates",
-                        systemImage: "checkmark.circle",
-                        description: Text("No files in your index share identical content.")
-                    )
-                } else if viewModel.isManualReviewMode {
-                    manualReviewContent
-                } else {
-                    List {
-                        ForEach(viewModel.exactDuplicateGroups) { group in
-                            Section {
-                                ForEach(group.files) { file in
-                                    let isRekordboxMatch = viewModel.isRekordboxMatched(filePath: file.path)
-                                    HStack(alignment: .top, spacing: 10) {
-                                        VStack(alignment: .leading, spacing: 4) {
-                                            Text(file.filename)
-                                                .font(.body)
-                                            Text(file.path)
-                                                .font(.caption)
-                                                .foregroundStyle(.secondary)
-                                                .textSelection(.enabled)
-                                        metadataLabel(for: file)
-                                                .font(.caption2)
-                                                .foregroundStyle(.secondary)
-                                        }
-                                        Spacer(minLength: 0)
-                                        VStack(alignment: .trailing, spacing: 6) {
-                                            Button("Preview") {
-                                                TrackPreviewService.shared.previewTrack(
-                                                    atPath: file.path,
-                                                    title: file.filename
-                                                )
-                                            }
-                                            .meloBorderedButton()
-
-                                            if isRekordboxMatch {
-                                                rekordboxMatchTag
-                                            }
-                                        }
-                                    }
-                                    .contextMenu {
-                                        Button("Copy Path") {
-                                            copyPath(file.path)
-                                        }
-                                        Button("Reveal in Finder") {
-                                            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: file.path)])
-                                        }
-                                    }
-                                }
-                            } header: {
-                                Text("Hash \(group.contentHash.prefix(12))... (\(group.files.count) files)")
-                            }
-                        }
-                    }
-                    .listStyle(.inset)
+                if viewModel.isScanningExactDuplicates || viewModel.isRunningSmartCleanup {
+                    ProgressView(viewModel.isRunningSmartCleanup ? "Running smart cleanup..." : "Scanning indexed files...")
+                        .controlSize(.small)
+                } else if let exactDuplicateScanError = viewModel.exactDuplicateScanError {
+                    Text(exactDuplicateScanError)
+                        .font(.caption)
+                        .foregroundStyle(.red)
                 }
-            }
 
-            Spacer(minLength: 0)
-            Divider()
-            bottomActionBar
-        }
-        .padding(16)
-        .frame(minWidth: 760, minHeight: 460, alignment: .topLeading)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .disableFocusRings()
-        .task(id: viewModel.showExactDuplicateFinder) {
-            if viewModel.showExactDuplicateFinder && viewModel.exactDuplicateGroups.isEmpty {
-                viewModel.refreshExactDuplicateGroups()
+                if let smartCleanupSummary = viewModel.smartCleanupSummary {
+                    Text(cleanupSummaryText(for: smartCleanupSummary))
+                        .font(.caption)
+                        .foregroundStyle(smartCleanupSummary.failedCount > 0 ? .orange : .secondary)
+                }
+
+                if let smartCleanupUndoToast = viewModel.smartCleanupUndoToast {
+                    smartCleanupUndoToastView(smartCleanupUndoToast)
+                }
+
+                if let rekordboxStatusText = viewModel.rekordboxStatusText {
+                    Text(rekordboxStatusText)
+                        .font(.caption)
+                        .foregroundStyle(viewModel.isRekordboxAssistActive ? Color.primary : Color.red)
+                }
+
+                if !viewModel.isManualReviewMode && !viewModel.isRekordboxAssistActive {
+                    Text("Import your Rekordbox collection on the Indexing page to see which duplicates are already in your DJ library.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+
+                duplicateFinderContent
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
+            .frame(maxWidth: SettingsLayout.contentMaxWidth, maxHeight: .infinity, alignment: .topLeading)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .padding(.horizontal, SettingsLayout.pageHorizontalPadding)
+            .padding(.top, SettingsLayout.pageTopPadding)
+
+            Divider()
+                .overlay(SettingsTheme.rowDivider)
+
+            DuplicatesActionBar(viewModel: viewModel)
+                .frame(maxWidth: SettingsLayout.contentMaxWidth, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, SettingsLayout.pageHorizontalPadding)
+                .padding(.vertical, SettingsLayout.sidebarBottomPadding)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(SettingsTheme.contentBackground)
+        .disableFocusRings()
         .confirmationDialog("Smart Cleanup", isPresented: $viewModel.showSmartCleanupConfirmation, titleVisibility: .visible) {
             Button("Clean All Duplicates", role: .destructive) {
                 viewModel.runSmartCleanup(scope: .allGroups)
@@ -980,6 +957,73 @@ private struct ExactDuplicateFinderSheet: View {
             Button("Continue Reviewing", role: .cancel) {}
         } message: {
             Text("This will discard all staged Keep/Skip decisions in this manual session and return to overview.")
+        }
+    }
+
+    @ViewBuilder
+    private var duplicateFinderContent: some View {
+        if viewModel.isScanningExactDuplicates || viewModel.isRunningSmartCleanup {
+            Spacer(minLength: 0)
+        } else if viewModel.exactDuplicateGroups.isEmpty {
+            ContentUnavailableView(
+                "No Exact Duplicates",
+                systemImage: "checkmark.circle",
+                description: Text("No files in your index share identical content.")
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if viewModel.isManualReviewMode {
+            manualReviewContent
+        } else {
+            List {
+                ForEach(Array(viewModel.exactDuplicateGroups.enumerated()), id: \.element.id) { index, group in
+                    Section {
+                        ForEach(group.files) { file in
+                            let isRekordboxMatch = viewModel.isRekordboxMatched(filePath: file.path)
+                            let isFirstRowInSection = file.id == group.files.first?.id
+                            HStack(alignment: .top, spacing: 10) {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(file.filename)
+                                        .font(.body)
+                                    Text(file.path)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .textSelection(.enabled)
+                                    metadataLabel(for: file)
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer(minLength: 0)
+                                VStack(alignment: .trailing, spacing: 6) {
+                                    Button("Preview") {
+                                        TrackPreviewService.shared.previewTrack(
+                                            atPath: file.path,
+                                            title: file.filename
+                                        )
+                                    }
+                                    .meloBorderedButton()
+
+                                    if isRekordboxMatch {
+                                        rekordboxMatchTag
+                                    }
+                                }
+                            }
+                            .listRowSeparator(isFirstRowInSection ? .hidden : .visible, edges: .top)
+                            .contextMenu {
+                                Button("Copy Path") {
+                                    copyPath(file.path)
+                                }
+                                Button("Reveal in Finder") {
+                                    NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: file.path)])
+                                }
+                            }
+                        }
+                    } header: {
+                        Text("Hash \(group.contentHash.prefix(12))... (\(group.files.count) files)")
+                    }
+                    .listSectionSeparator(index == 0 ? .hidden : .visible, edges: .top)
+                }
+            }
+            .listStyle(.inset)
         }
     }
 
@@ -1025,11 +1069,16 @@ private struct ExactDuplicateFinderSheet: View {
                 List {
                     Section {
                         ForEach(state.group.files) { file in
-                            manualReviewRow(file: file, state: state)
+                            manualReviewRow(
+                                file: file,
+                                state: state,
+                                hidesTopRowSeparator: file.id == state.group.files.first?.id
+                            )
                         }
                     } header: {
                         Text("Hash \(state.group.contentHash.prefix(12))... (\(state.group.files.count) files)")
                     }
+                    .listSectionSeparator(.hidden, edges: .top)
                 }
                 .listStyle(.inset)
             }
@@ -1043,7 +1092,11 @@ private struct ExactDuplicateFinderSheet: View {
     }
 
     @ViewBuilder
-    private func manualReviewRow(file: ExactDuplicateFileEntry, state: ManualDuplicateGroupState) -> some View {
+    private func manualReviewRow(
+        file: ExactDuplicateFileEntry,
+        state: ManualDuplicateGroupState,
+        hidesTopRowSeparator: Bool = false
+    ) -> some View {
         let isSelectedKeeper = state.keeperPath == file.path
         let isRekordboxMatch = viewModel.isRekordboxMatched(filePath: file.path)
         let isStagedForTrash = viewModel.manualCurrentGroupStagedRemovalPaths.contains(file.path)
@@ -1100,6 +1153,7 @@ private struct ExactDuplicateFinderSheet: View {
                 .stroke(rowStrokeColor, lineWidth: 1)
         )
         .contentShape(.rect)
+        .listRowSeparator(hidesTopRowSeparator ? .hidden : .visible, edges: .top)
         .onTapGesture {
             viewModel.selectManualKeeper(path: file.path)
         }
@@ -1112,91 +1166,6 @@ private struct ExactDuplicateFinderSheet: View {
             countStyle: .file
         )
         return "Staged groups: \(viewModel.manualStagedCleanupGroupCount) | Staged files: \(viewModel.manualStagedCleanupFileCount) | Staged reclaim: \(stagedReclaim) | Applied groups: \(viewModel.manualAppliedGroupsCount) | Removed files: \(viewModel.manualAppliedFilesCount) | Failed: \(viewModel.manualFailedDeleteCount) | Reclaimed: \(reclaimed)"
-    }
-
-    @ViewBuilder
-    private var bottomActionBar: some View {
-        HStack(spacing: 10) {
-            if viewModel.isManualReviewMode {
-                Button("Previous") {
-                    viewModel.moveToPreviousManualGroup()
-                }
-                .meloBorderedButton()
-                .disabled(viewModel.manualCurrentIndex == 0 || viewModel.isRunningSmartCleanup)
-
-                Button("Skip") {
-                    viewModel.skipManualGroup()
-                }
-                .meloBorderedButton()
-                .disabled(viewModel.manualCurrentIndex >= viewModel.manualRemainingGroupsCount - 1 || viewModel.isRunningSmartCleanup)
-
-                Button(viewModel.manualCurrentGroupHasStagedApply ? "Restore" : "Keep Selected, Trash Others") {
-                    if viewModel.manualCurrentGroupHasStagedApply {
-                        viewModel.restoreCurrentManualGroupAction()
-                    } else {
-                        viewModel.applyCurrentManualGroup()
-                    }
-                }
-                .meloBorderedButton(destructive: !viewModel.manualCurrentGroupHasStagedApply)
-                .disabled(viewModel.manualCurrentGroupState == nil || viewModel.isRunningSmartCleanup)
-            } else {
-                Button("Manual Review") {
-                    viewModel.returnToManualReviewMode()
-                }
-                .meloBorderedButton()
-                .disabled(
-                    viewModel.exactDuplicateGroups.isEmpty
-                    || viewModel.isScanningExactDuplicates
-                    || viewModel.isRunningSmartCleanup
-                )
-
-                Picker("Keep rule", selection: $viewModel.smartCleanupKeepRule) {
-                    ForEach(SmartCleanupKeepRule.allCases) { rule in
-                        Text(rule.title).tag(rule)
-                    }
-                }
-                .labelsHidden()
-                .pickerStyle(.menu)
-                .focusable(false)
-                .disabled(viewModel.isRunningSmartCleanup)
-
-                Button("Smart Cleanup...") {
-                    viewModel.showSmartCleanupConfirmation = true
-                }
-                .meloBorderedButton(destructive: true)
-                .focusable(false)
-                .disabled(
-                    viewModel.exactDuplicateGroups.isEmpty
-                    || viewModel.isScanningExactDuplicates
-                    || viewModel.isRunningSmartCleanup
-                    || viewModel.isIndexing
-                )
-            }
-
-            Spacer(minLength: 0)
-
-            if viewModel.isManualReviewMode {
-                Button("Cancel Session") {
-                    viewModel.showManualSessionCancelDialog = true
-                }
-                .meloBorderedButton()
-                .disabled(viewModel.isRunningSmartCleanup)
-
-                Button("Confirm Session") {
-                    viewModel.showManualSessionConfirmDialog = true
-                }
-                .meloBorderedButton(destructive: true)
-                .disabled(viewModel.isRunningSmartCleanup || !viewModel.hasManualStagedCleanupActions)
-            } else {
-                Button("Close") {
-                    dismiss()
-                }
-                .meloBorderedButton()
-                .keyboardShortcut(.cancelAction)
-                .focusable(false)
-                .disabled(viewModel.isRunningSmartCleanup)
-            }
-        }
     }
 
     private func copyPath(_ path: String) {
@@ -1301,6 +1270,86 @@ private struct ExactDuplicateFinderSheet: View {
         Files to move: \(files)
         Estimated reclaim: \(reclaim)
         """
+    }
+}
+
+private struct DuplicatesActionBar: View {
+    @ObservedObject var viewModel: IndexingSettingsViewModel
+
+    var body: some View {
+        HStack(spacing: 10) {
+            if viewModel.isManualReviewMode {
+                Button("Previous") {
+                    viewModel.moveToPreviousManualGroup()
+                }
+                .meloBorderedButton()
+                .disabled(viewModel.manualCurrentIndex == 0 || viewModel.isRunningSmartCleanup)
+
+                Button("Skip") {
+                    viewModel.skipManualGroup()
+                }
+                .meloBorderedButton()
+                .disabled(viewModel.manualCurrentIndex >= viewModel.manualRemainingGroupsCount - 1 || viewModel.isRunningSmartCleanup)
+
+                Button(viewModel.manualCurrentGroupHasStagedApply ? "Restore" : "Keep Selected, Trash Others") {
+                    if viewModel.manualCurrentGroupHasStagedApply {
+                        viewModel.restoreCurrentManualGroupAction()
+                    } else {
+                        viewModel.applyCurrentManualGroup()
+                    }
+                }
+                .meloBorderedButton(destructive: !viewModel.manualCurrentGroupHasStagedApply)
+                .disabled(viewModel.manualCurrentGroupState == nil || viewModel.isRunningSmartCleanup)
+
+                Spacer(minLength: 0)
+
+                Button("Cancel Session") {
+                    viewModel.showManualSessionCancelDialog = true
+                }
+                .meloBorderedButton()
+                .disabled(viewModel.isRunningSmartCleanup)
+
+                Button("Confirm Session") {
+                    viewModel.showManualSessionConfirmDialog = true
+                }
+                .meloBorderedButton(destructive: true)
+                .disabled(viewModel.isRunningSmartCleanup || !viewModel.hasManualStagedCleanupActions)
+            } else {
+                Button("Manual Review") {
+                    viewModel.returnToManualReviewMode()
+                }
+                .meloBorderedButton()
+                .disabled(
+                    viewModel.exactDuplicateGroups.isEmpty
+                    || viewModel.isScanningExactDuplicates
+                    || viewModel.isRunningSmartCleanup
+                )
+
+                Button("Smart Cleanup...") {
+                    viewModel.showSmartCleanupConfirmation = true
+                }
+                .meloBorderedButton(destructive: true)
+                .focusable(false)
+                .disabled(
+                    viewModel.exactDuplicateGroups.isEmpty
+                    || viewModel.isScanningExactDuplicates
+                    || viewModel.isRunningSmartCleanup
+                    || viewModel.isIndexing
+                )
+
+                Spacer(minLength: 0)
+
+                Picker("Keep rule", selection: $viewModel.smartCleanupKeepRule) {
+                    ForEach(SmartCleanupKeepRule.allCases) { rule in
+                        Text(rule.title).tag(rule)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .focusable(false)
+                .disabled(viewModel.isRunningSmartCleanup)
+            }
+        }
     }
 }
 

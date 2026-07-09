@@ -341,38 +341,29 @@ private struct SessionSidebar: View {
     }
 
     private var sidebarFooter: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Divider()
-                .overlay(SessionTheme.rowDivider)
-
+        SidebarFooterSection {
             if let onOpenSettings {
                 Button(action: onOpenSettings) {
-                    settingsButtonLabel
+                    SidebarFooterButtonLabel(
+                        title: "Settings",
+                        systemImage: "gearshape",
+                        isHovered: isSettingsHovered
+                    )
                 }
                 .buttonStyle(.plain)
                 .onHover { isSettingsHovered = $0 }
             } else {
                 SettingsLink {
-                    settingsButtonLabel
+                    SidebarFooterButtonLabel(
+                        title: "Settings",
+                        systemImage: "gearshape",
+                        isHovered: isSettingsHovered
+                    )
                 }
                 .buttonStyle(.plain)
                 .onHover { isSettingsHovered = $0 }
             }
         }
-        .padding(.horizontal, 6)
-    }
-
-    private var settingsButtonLabel: some View {
-        Label("Settings", systemImage: "gearshape")
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(settingsButtonFill, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .contentShape(Rectangle())
-    }
-
-    private var settingsButtonFill: Color {
-        isSettingsHovered ? Color.primary.opacity(0.08) : .clear
     }
 
     private var formatControlForeground: Color {

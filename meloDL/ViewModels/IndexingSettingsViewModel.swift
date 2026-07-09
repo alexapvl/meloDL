@@ -33,7 +33,6 @@ final class IndexingSettingsViewModel: ObservableObject {
     @Published private(set) var rekordboxImportedTrackCount = 0
     @Published private(set) var rekordboxImportError: String?
     @Published private(set) var rekordboxSourceFilename: String?
-    @Published var showExactDuplicateFinder = false
     @Published var showManualSessionConfirmDialog = false
     @Published var showManualSessionCancelDialog = false
     @Published var showClearDataConfirmation = false
@@ -137,16 +136,18 @@ final class IndexingSettingsViewModel: ObservableObject {
         }
     }
 
-    func openExactDuplicateFinder() {
-        showExactDuplicateFinder = true
-        showManualSessionConfirmDialog = false
-        showManualSessionCancelDialog = false
-        clearSmartCleanupUndoWindow()
-        isManualReviewMode = false
-        resetManualReviewStats()
-        manualQueue = []
-        manualCurrentIndex = 0
-        refreshExactDuplicateGroups()
+    func onDuplicatesPageAppeared() {
+        if exactDuplicateGroups.isEmpty && !isScanningExactDuplicates {
+            refreshExactDuplicateGroups()
+        }
+    }
+
+    func onDuplicatesPageDisappeared() {
+        reindexAfterDuplicateFinderClosed()
+    }
+
+    var requiresLeaveDuplicatesConfirmation: Bool {
+        isManualReviewMode && hasManualStagedCleanupActions
     }
 
     func importRekordboxXMLUsingPanel() {
@@ -391,6 +392,12 @@ final class IndexingSettingsViewModel: ObservableObject {
     }
 
     func confirmManualReviewSession() {
+        Task {
+            await confirmManualReviewSessionAsync()
+        }
+    }
+
+    func confirmManualReviewSessionAsync() async {
         guard !isRunningSmartCleanup else { return }
         let filesToDelete = stagedManualFilesToDelete()
         let groupsToApply = manualQueue.filter { $0.status == .stagedApply }.count
@@ -400,40 +407,38 @@ final class IndexingSettingsViewModel: ObservableObject {
         let rootsSnapshot = roots
         startActivityPolling()
 
-        Task {
-            defer { isRunningSmartCleanup = false }
-            defer {
-                showManualSessionConfirmDialog = false
-                showManualSessionCancelDialog = false
-                showOverviewMode()
-            }
+        defer { isRunningSmartCleanup = false }
+        defer {
+            showManualSessionConfirmDialog = false
+            showManualSessionCancelDialog = false
+            showOverviewMode()
+        }
 
-            guard !filesToDelete.isEmpty else {
-                resetManualReviewSessionDecisions()
-                return
-            }
+        guard !filesToDelete.isEmpty else {
+            resetManualReviewSessionDecisions()
+            return
+        }
 
-            let result = await Self.trashDuplicateFiles(filesToDelete)
+        let result = await Self.trashDuplicateFiles(filesToDelete)
 
-            manualAppliedGroupsCount += groupsToApply
-            manualAppliedFilesCount += result.removedCount
-            manualFailedDeleteCount += result.failedCount
-            manualReclaimedBytes += result.reclaimedBytes
+        manualAppliedGroupsCount += groupsToApply
+        manualAppliedFilesCount += result.removedCount
+        manualFailedDeleteCount += result.failedCount
+        manualReclaimedBytes += result.reclaimedBytes
 
-            await indexer.reindexNow(roots: rootsSnapshot)
-            await refreshSnapshot()
+        await indexer.reindexNow(roots: rootsSnapshot)
+        await refreshSnapshot()
 
-            do {
-                exactDuplicateGroups = try await duplicateDetectionService.findExactDuplicateFileGroups()
-                refreshManualQueueFromCurrentGroups()
-                resetManualReviewSessionDecisions()
-            } catch {
-                exactDuplicateScanError = "Session applied, but duplicate list refresh failed: \(error.localizedDescription)"
-            }
+        do {
+            exactDuplicateGroups = try await duplicateDetectionService.findExactDuplicateFileGroups()
+            refreshManualQueueFromCurrentGroups()
+            resetManualReviewSessionDecisions()
+        } catch {
+            exactDuplicateScanError = "Session applied, but duplicate list refresh failed: \(error.localizedDescription)"
+        }
 
-            if result.failedCount > 0 {
-                exactDuplicateScanError = "Failed to move \(result.failedCount) file(s) to Trash."
-            }
+        if result.failedCount > 0 {
+            exactDuplicateScanError = "Failed to move \(result.failedCount) file(s) to Trash."
         }
     }
 
