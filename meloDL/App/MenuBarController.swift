@@ -20,7 +20,7 @@ final class MenuBarController: NSObject {
         onSwitchToDockMode: @escaping () -> Void,
         onQuit: @escaping () -> Void
     ) {
-        self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         self.popover = NSPopover()
         self.appSettings = appSettings
         self.sessionCoordinator = sessionCoordinator
@@ -39,6 +39,7 @@ final class MenuBarController: NSObject {
         if let image = NSImage(named: "MenuBarLogo") {
             image.isTemplate = true
             button.image = image
+            button.imagePosition = .imageOnly
         } else {
             button.title = "meloDL"
         }
@@ -56,7 +57,7 @@ final class MenuBarController: NSObject {
         )
         .disableFocusRings()
         popover.contentViewController = NSHostingController(rootView: rootView)
-        popover.contentSize = NSSize(width: 580, height: 600)
+        popover.contentSize = NSSize(width: SessionLayout.windowMinWidth, height: SessionLayout.windowMinHeight)
         popover.behavior = .transient
     }
 

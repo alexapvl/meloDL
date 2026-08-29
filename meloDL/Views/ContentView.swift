@@ -35,7 +35,7 @@ struct ContentView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(SessionTheme.contentBackground)
-        .frame(minWidth: 580, minHeight: 620)
+        .frame(minWidth: SessionLayout.windowMinWidth, minHeight: SessionLayout.windowMinHeight)
         .onAppear { coordinator.onAppear() }
         .onChange(of: appSettings.maxParallelSessions) {
             coordinator.maxParallelSessionsDidChange()
@@ -48,6 +48,7 @@ private struct SessionSidebar: View {
     @ObservedObject var coordinator: DownloadSessionCoordinator
     let onOpenSettings: (() -> Void)?
     @Environment(\.controlActiveState) private var controlActiveState
+    @Environment(\.compactWindowChrome) private var compactWindowChrome
     @State private var isSettingsHovered = false
     @State private var isFormatHovered = false
     @State private var isDestinationHovered = false
@@ -77,7 +78,7 @@ private struct SessionSidebar: View {
 
             sidebarFooter
         }
-        .padding(.top, SessionLayout.sidebarTopInset)
+        .padding(.top, compactWindowChrome ? SessionLayout.compactSidebarTopInset : SessionLayout.sidebarTopInset)
         .padding(.bottom, SessionLayout.sidebarBottomPadding)
         .frame(width: SessionLayout.sidebarWidth)
         .frame(maxHeight: .infinity, alignment: .topLeading)
@@ -567,6 +568,7 @@ private struct SessionDetailPane: View {
     @ObservedObject var appSettings: AppSettings
     @ObservedObject var coordinator: DownloadSessionCoordinator
     let session: DownloadSession?
+    @Environment(\.compactWindowChrome) private var compactWindowChrome
     @State private var isRemoveConfirming = false
     @State private var isConfirmingSkipRemaining = false
 
@@ -579,7 +581,7 @@ private struct SessionDetailPane: View {
                         .frame(maxWidth: SessionLayout.detailContentMaxWidth, alignment: .leading)
                         .frame(maxWidth: .infinity, alignment: .top)
                         .padding(.horizontal, 46)
-                        .padding(.top, 52)
+                        .padding(.top, compactWindowChrome ? SessionLayout.compactDetailHeaderTopPadding : SessionLayout.detailHeaderTopPadding)
                         .padding(.bottom, 20)
                         .background(SessionTheme.contentBackground)
 
@@ -1090,11 +1092,27 @@ private struct SessionHistoryGroup: Identifiable {
     }
 }
 
-private enum SessionLayout {
+enum SessionLayout {
     static let sidebarWidth: CGFloat = 230
     static let sidebarTopInset: CGFloat = 64
+    static let compactSidebarTopInset: CGFloat = 12
     static let sidebarBottomPadding: CGFloat = 12
+    static let detailHeaderTopPadding: CGFloat = 52
+    static let compactDetailHeaderTopPadding: CGFloat = 16
     static let detailContentMaxWidth: CGFloat = 760
+    static let windowMinWidth: CGFloat = 580
+    static let windowMinHeight: CGFloat = 620
+}
+
+private struct CompactWindowChromeKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    var compactWindowChrome: Bool {
+        get { self[CompactWindowChromeKey.self] }
+        set { self[CompactWindowChromeKey.self] = newValue }
+    }
 }
 
 private enum SessionTheme {

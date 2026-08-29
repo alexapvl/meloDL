@@ -24,7 +24,6 @@ enum AppWindowID {
 struct meloDLApp: App {
     @StateObject private var appSettings: AppSettings
     @StateObject private var sessionCoordinator: DownloadSessionCoordinator
-    @State private var menuBarController: MenuBarController?
     @State private var didTriggerLaunchReindex = false
     @State private var isShowingSettings = false
     @Environment(\.openWindow) private var openWindow
@@ -142,7 +141,7 @@ struct meloDLApp: App {
             }
             .onAppear {
                 triggerLaunchReindexIfNeeded()
-                menuBarController = nil
+                appLifecycleDelegate.menuBarController = nil
                 focusMainWindowIfNeeded()
                 DispatchQueue.main.async {
                     consolidateMainWindows()
@@ -250,11 +249,11 @@ struct meloDLApp: App {
 
     private func configureMenuBarControllerIfNeeded() {
         guard launchMenubarOnlyMode else {
-            menuBarController = nil
+            appLifecycleDelegate.menuBarController = nil
             return
         }
-        guard menuBarController == nil else { return }
-        menuBarController = MenuBarController(
+        guard appLifecycleDelegate.menuBarController == nil else { return }
+        appLifecycleDelegate.menuBarController = MenuBarController(
             appSettings: appSettings,
             sessionCoordinator: sessionCoordinator,
             onCheckAllUpdates: checkForAllUpdates,
@@ -294,6 +293,13 @@ private final class DownloadNotificationCenterDelegate: NSObject, UNUserNotifica
 @MainActor
 private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
     static weak var sessionCoordinator: DownloadSessionCoordinator?
+    var menuBarController: MenuBarController?
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        let menubarOnly = UserDefaults.standard.bool(forKey: SettingsKeys.menubarOnlyMode)
+        let onboardingCompleted = UserDefaults.standard.bool(forKey: SettingsKeys.onboardingCompleted)
+        return !(menubarOnly && onboardingCompleted)
+    }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let sessionCoordinator = Self.sessionCoordinator, sessionCoordinator.hasActiveSessionsForQuit else {

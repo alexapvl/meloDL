@@ -10,8 +10,14 @@ struct SidebarFooterSection<Content: View>: View {
     @ViewBuilder let content: () -> Content
 
     var body: some View {
-        content()
-            .padding(.horizontal, SidebarFooterMetrics.horizontalPadding)
+        VStack(spacing: 0) {
+            Divider()
+                .overlay(Color.secondary.opacity(0.13))
+                .padding(.bottom, 8)
+
+            content()
+                .padding(.horizontal, SidebarFooterMetrics.horizontalPadding)
+        }
     }
 }
 

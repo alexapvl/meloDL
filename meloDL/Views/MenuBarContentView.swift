@@ -15,6 +15,7 @@ struct MenuBarContentView: View {
                 onOpenSettings()
             }
         )
-        .frame(width: 580, height: 600)
+        .frame(width: SessionLayout.windowMinWidth, height: SessionLayout.windowMinHeight)
+        .environment(\.compactWindowChrome, true)
     }
 }
