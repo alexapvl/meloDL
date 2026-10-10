@@ -15,14 +15,19 @@
 - Accepts media URLs and downloads audio tracks, including playlists.
 - Supports many websites via `yt-dlp`, including YouTube (Music), SoundCloud, TikTok, Instagram, and X (Twitter) and many more.
 - Full supported website list: https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md
-- Supports configurable output format and quality.
-- Supports playlist downloads with queue/status UI.
+- Converts to MP3, M4A, FLAC, WAV, or OGG, with a quality setting.
+- Embeds artist, title, album, and related tags. MP3, M4A, and FLAC can also embed artwork.
+- Supports playlist downloads with queue and status. Fast mode downloads several playlist tracks at once.
+- Runs more than one download session at a time, and keeps session history so a batch can be reopened later.
+- Lets you pick the destination for the next download, including folders already in the library index.
+- Preview a finished track, or reveal it in Finder.
+- Trim a finished track on a waveform: zoom and drag to choose the section, preview it, then save a new file or replace the original. Replacing moves the old file to the Trash, and tags and artwork stay. MP3, M4A, and OGG are cut without re-encoding. FLAC and WAV are sample-accurate.
 - Prevents obvious re-downloads by checking an indexed local library before downloading.
 - Supports duplicate cleanup workflows backed by full library indexing and byte-level audio hashing.
 - Supports Rekordbox XML import to improve duplicate matching for DJ workflows.
-- Uses staged duplicate-review sessions so changes can be reviewed, adjusted, and confirmed before final cleanup.
+- Uses staged duplicate-review sessions so changes can be reviewed, adjusted, and confirmed before final cleanup. Cards can be swiped or dragged aside.
 - Includes a short post-action undo window for smart cleanup actions.
-- Optionally embeds metadata and thumbnails (depending on audio format).
+- Can run from the menu bar only, launch at login, post session notifications, and open the download folder when a batch finishes.
 - Supports automatic update checks for bundled download binaries (`yt-dlp`, `ffmpeg`, `ffprobe`).
 
 ## Architecture overview
@@ -34,6 +39,7 @@
   - `ffmpeg` / `ffprobe`
 - The app orchestrates these tools through `Process` execution in Swift.
 - For playlist URLs, the app can prefetch entries and process multiple items.
+- Finished tracks can be previewed or trimmed in the app. Trimming runs `ffmpeg` on the local file.
 
 ### Library indexing and duplicate resolution
 
