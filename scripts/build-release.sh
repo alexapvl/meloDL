@@ -22,6 +22,7 @@ DMG_PATH="$BUILD_DIR/$SCHEME.dmg"
 DMG_STAGING_DIR="$BUILD_DIR/dmg-staging"
 HELPER_ENTITLEMENTS="$PROJECT_DIR/scripts/helper-binary.entitlements"
 TEAM_ID="THZ82CJTKM"
+DEFAULT_SIGNING_IDENTITY_HASH="2794A80E85FC909E727A98F633400A39B2DAEF14"
 NOTARIZE=false
 
 if [[ "${1:-}" == "--notarize" ]]; then
@@ -61,16 +62,9 @@ xcodebuild -exportArchive \
     -quiet
 
 echo "==> Re-signing bundled executables with hardened runtime..."
-SIGNING_IDENTITY_HASH="${SIGNING_IDENTITY_HASH:-}"
-if [[ -z "$SIGNING_IDENTITY_HASH" ]]; then
-    SIGNING_IDENTITY_HASH="$(
-        security find-identity -v -p codesigning \
-        | grep -E "Developer ID Application: .*\\($TEAM_ID\\)" \
-        | awk 'NR==1 {print $2}'
-    )"
-fi
+SIGNING_IDENTITY_HASH="${SIGNING_IDENTITY_HASH:-$DEFAULT_SIGNING_IDENTITY_HASH}"
 
-if [[ -z "$SIGNING_IDENTITY_HASH" ]]; then
+if ! security find-identity -v -p codesigning | grep -q "$SIGNING_IDENTITY_HASH"; then
     echo "ERROR: Could not find a Developer ID Application signing identity for team $TEAM_ID."
     echo "Set SIGNING_IDENTITY_HASH explicitly if needed."
     exit 1

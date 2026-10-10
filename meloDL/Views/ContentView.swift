@@ -67,7 +67,9 @@ private struct SessionSidebar: View {
                                 group: group,
                                 selectedSessionID: coordinator.selectedSession?.id,
                                 onSelect: coordinator.selectSession,
-                                onRequestDelete: requestDeleteConfirmation
+                                onRequestDelete: requestDeleteConfirmation,
+                                makeTrimTarget: coordinator.makeTrimTarget(for:),
+                                onTrim: coordinator.openTrimEditor
                             )
                         }
                     }
@@ -405,6 +407,8 @@ private struct SessionHistoryGroupView: View {
     let selectedSessionID: UUID?
     let onSelect: (DownloadSession) -> Void
     let onRequestDelete: (DownloadSession) -> Void
+    let makeTrimTarget: (DownloadSession) -> TrimTarget?
+    let onTrim: (TrimTarget) -> Void
     @State private var isExpanded = true
 
     var body: some View {
@@ -433,12 +437,12 @@ private struct SessionHistoryGroupView: View {
                 ForEach(group.sessions) { session in
                     SessionSidebarRow(
                         session: session,
-                        isSelected: selectedSessionID == session.id
-                    ) {
-                        onSelect(session)
-                    } onRequestDelete: {
-                        onRequestDelete(session)
-                    }
+                        isSelected: selectedSessionID == session.id,
+                        action: { onSelect(session) },
+                        onRequestDelete: { onRequestDelete(session) },
+                        makeTrimTarget: { makeTrimTarget(session) },
+                        onTrim: onTrim
+                    )
                 }
             }
         }
@@ -453,19 +457,9 @@ private struct SessionSidebarRow: View {
     let isSelected: Bool
     let action: () -> Void
     let onRequestDelete: () -> Void
+    let makeTrimTarget: () -> TrimTarget?
+    let onTrim: (TrimTarget) -> Void
     @State private var isHovered = false
-
-    init(
-        session: DownloadSession,
-        isSelected: Bool,
-        action: @escaping () -> Void,
-        onRequestDelete: @escaping () -> Void
-    ) {
-        self.session = session
-        self.isSelected = isSelected
-        self.action = action
-        self.onRequestDelete = onRequestDelete
-    }
 
     var body: some View {
         Button(action: action) {
@@ -507,6 +501,14 @@ private struct SessionSidebarRow: View {
                     NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
                 } label: {
                     Label("Reveal in Finder", systemImage: "folder")
+                }
+            }
+
+            if let trimTarget = makeTrimTarget() {
+                Button {
+                    onTrim(trimTarget)
+                } label: {
+                    Label("Trim…", systemImage: "scissors")
                 }
             }
 
@@ -575,6 +577,8 @@ private struct SessionDetailPane: View {
     var body: some View {
         if let session {
             let reviewItem = coordinator.currentDuplicateReviewItem(for: session.id)
+            let trimTarget = coordinator.trimTarget.flatMap { $0.sessionID == session.id ? $0 : nil }
+            let isOverlayPresented = reviewItem != nil || trimTarget != nil
             ZStack {
                 VStack(spacing: 0) {
                     header(for: session)
@@ -597,16 +601,20 @@ private struct SessionDetailPane: View {
                             .padding(.bottom, 32)
                     }
                 }
-                .blur(radius: reviewItem == nil ? 0 : 7)
-                .disabled(reviewItem != nil)
+                .blur(radius: isOverlayPresented ? 7 : 0)
+                .disabled(isOverlayPresented)
 
-                if let reviewItem {
+                if let trimTarget {
+                    trimEditorOverlay(target: trimTarget)
+                        .transition(.opacity.combined(with: .scale(scale: 0.98)))
+                } else if let reviewItem {
                     duplicateReviewOverlay(item: reviewItem, session: session)
                         .transition(.opacity.combined(with: .scale(scale: 0.98)))
                 }
             }
             .background(SessionTheme.contentBackground)
             .animation(.easeInOut(duration: 0.18), value: reviewItem?.id)
+            .animation(.easeInOut(duration: 0.18), value: trimTarget?.id)
             .onChange(of: session.id) {
                 isRemoveConfirming = false
                 isConfirmingSkipRemaining = false
@@ -667,6 +675,30 @@ private struct SessionDetailPane: View {
                     coordinator.removeSession(session.id)
                 }
             }
+        }
+    }
+
+    private func trimEditorOverlay(target: TrimTarget) -> some View {
+        ZStack {
+            Rectangle()
+                .fill(.black.opacity(0.18))
+                .ignoresSafeArea()
+
+            TrimEditorView(
+                target: target,
+                onFileChanged: coordinator.trimmedFileDidChange,
+                onClose: coordinator.closeTrimEditor
+            )
+            .id(target.id)
+            .padding(24)
+            .frame(maxWidth: 760)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(SessionTheme.cardStroke, lineWidth: 1)
+            }
+            .shadow(radius: 22, y: 12)
+            .padding(34)
         }
     }
 
@@ -759,7 +791,11 @@ private struct SessionDetailPane: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 } else {
                     ForEach(sortedItems) { item in
-                        SessionItemRow(item: item)
+                        SessionItemRow(
+                            item: item,
+                            trimTarget: coordinator.makeTrimTarget(forFileAt: item.outputFilePath, title: item.title, in: session.id),
+                            onTrim: coordinator.openTrimEditor
+                        )
                         if item.id != sortedItems.last?.id {
                             Divider()
                                 .overlay(SessionTheme.rowDivider)
@@ -831,6 +867,8 @@ private struct SessionDetailPane: View {
 
 private struct SessionItemRow: View {
     let item: DownloadSessionItem
+    let trimTarget: TrimTarget?
+    let onTrim: (TrimTarget) -> Void
 
     var body: some View {
         HStack(spacing: 10) {
@@ -852,15 +890,74 @@ private struct SessionItemRow: View {
 
             Spacer()
 
-            if let path = item.outputFilePath, FileManager.default.fileExists(atPath: path) {
+            if let path = existingOutputPath {
+                if let trimTarget {
+                    Button {
+                        onTrim(trimTarget)
+                    } label: {
+                        Image(systemName: "scissors")
+                    }
+                    .meloBorderedButton()
+                    .help("Trim")
+                }
+
                 Button("Preview") {
                     TrackPreviewService.shared.previewTrack(atPath: path, title: item.title)
                 }
                 .meloBorderedButton()
+            } else if let missingPath = item.outputFilePath {
+                HStack(spacing: 10) {
+                    if AudioTrimFormat(fileURL: URL(fileURLWithPath: missingPath)) != nil {
+                        Button {} label: {
+                            Image(systemName: "scissors")
+                        }
+                        .meloBorderedButton()
+                    }
+
+                    Button("Preview") {}
+                        .meloBorderedButton()
+                }
+                .disabled(true)
+                // Disabled controls get no hover, so the explanation sits on an overlay.
+                .overlay {
+                    MissingFileTooltip(
+                        text: "File not found in its original download location:\n\(missingPath)"
+                    )
+                }
             }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
+        .contentShape(.rect)
+        .contextMenu {
+            if let path = existingOutputPath {
+                Button {
+                    TrackPreviewService.shared.previewTrack(atPath: path, title: item.title)
+                } label: {
+                    Label("Preview", systemImage: "eye")
+                }
+
+                if let trimTarget {
+                    Button {
+                        onTrim(trimTarget)
+                    } label: {
+                        Label("Trim…", systemImage: "scissors")
+                    }
+                }
+
+                Button {
+                    NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+                } label: {
+                    Label("Reveal in Finder", systemImage: "folder")
+                }
+            }
+        }
+    }
+
+    private var existingOutputPath: String? {
+        guard let path = trimTarget?.fileURL.path ?? item.outputFilePath,
+              FileManager.default.fileExists(atPath: path) else { return nil }
+        return path
     }
 
     private var detailText: String {
@@ -966,6 +1063,148 @@ private struct ShimmeringStatusText: View {
                 .lineLimit(1)
         }
         .allowsHitTesting(false)
+    }
+}
+
+/// System `.help()` waits about a second. This shows the same tooltip material sooner,
+/// because the buttons look tappable until the file turns out to be gone.
+private struct MissingFileTooltip: NSViewRepresentable {
+    var text: String
+
+    func makeNSView(context: Context) -> MissingFileTooltipView {
+        let view = MissingFileTooltipView()
+        view.text = text
+        return view
+    }
+
+    func updateNSView(_ nsView: MissingFileTooltipView, context: Context) {
+        nsView.text = text
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: MissingFileTooltipView, context: Context) -> CGSize? {
+        CGSize(width: proposal.width ?? 0, height: proposal.height ?? 0)
+    }
+
+    static func dismantleNSView(_ nsView: MissingFileTooltipView, coordinator: ()) {
+        nsView.dismiss()
+    }
+}
+
+private final class MissingFileTooltipView: NSView {
+    var text = "" {
+        didSet { setAccessibilityLabel(text) }
+    }
+
+    private static let delay: TimeInterval = 0.15
+    private static let maxTextWidth: CGFloat = 360
+
+    private var showItem: DispatchWorkItem?
+    private var panel: NSPanel?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        setAccessibilityElement(true)
+        setAccessibilityLabel(text)
+        if window == nil {
+            dismiss()
+        }
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        for area in trackingAreas {
+            removeTrackingArea(area)
+        }
+        addTrackingArea(NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+            owner: self
+        ))
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        showItem?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            self?.present()
+        }
+        showItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.delay, execute: item)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        dismiss()
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        dismiss()
+    }
+
+    func dismiss() {
+        showItem?.cancel()
+        showItem = nil
+        panel?.orderOut(nil)
+        panel = nil
+    }
+
+    private func present() {
+        guard window != nil, !text.isEmpty else { return }
+        dismiss()
+
+        let field = NSTextField(wrappingLabelWithString: text)
+        field.font = .toolTipsFont(ofSize: 0)
+        field.textColor = .labelColor
+        field.preferredMaxLayoutWidth = Self.maxTextWidth
+        let textSize = field.sizeThatFits(NSSize(width: Self.maxTextWidth, height: 10_000))
+        let padX: CGFloat = 6
+        let padY: CGFloat = 2
+        field.frame = NSRect(x: padX, y: padY, width: ceil(textSize.width), height: ceil(textSize.height))
+
+        let content = NSVisualEffectView(frame: NSRect(
+            x: 0,
+            y: 0,
+            width: field.frame.width + padX * 2,
+            height: field.frame.height + padY * 2
+        ))
+        content.material = .toolTip
+        content.blendingMode = .behindWindow
+        content.state = .active
+        content.wantsLayer = true
+        content.layer?.cornerRadius = 4
+        content.layer?.masksToBounds = true
+        content.addSubview(field)
+
+        let panel = NSPanel(
+            contentRect: content.frame,
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        panel.contentView = content
+        panel.isFloatingPanel = true
+        panel.level = .popUpMenu
+        panel.ignoresMouseEvents = true
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        panel.hidesOnDeactivate = true
+        panel.collectionBehavior = [.transient, .ignoresCycle]
+
+        let size = content.frame.size
+        let mouse = NSEvent.mouseLocation
+        let visible = (window?.screen ?? NSScreen.main)?.visibleFrame ?? NSRect(
+            x: 0, y: 0, width: size.width, height: size.height
+        )
+        var origin = NSPoint(x: mouse.x + 2, y: mouse.y - size.height - 6)
+        if origin.x + size.width > visible.maxX {
+            origin.x = visible.maxX - size.width - 4
+        }
+        origin.x = max(origin.x, visible.minX + 4)
+        if origin.y < visible.minY {
+            origin.y = mouse.y + 14
+        }
+        panel.setFrameOrigin(origin)
+        panel.orderFrontRegardless()
+        self.panel = panel
     }
 }
 

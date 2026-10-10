@@ -310,6 +310,45 @@ final class DownloadEngine {
 
     // MARK: - Process Execution
 
+    // MARK: - Trim
+
+    func trimAudio(
+        source: URL,
+        destination: URL,
+        start: TimeInterval,
+        duration: TimeInterval,
+        codecArguments: [String],
+        edgeFade: TimeInterval?
+    ) async throws {
+        let ffmpegPath = await binaryManager.ffmpegPath
+        var arguments = [
+            "-hide_banner", "-nostdin", "-y",
+            "-ss", ffmpegTime(start),
+            "-i", source.path,
+            "-t", ffmpegTime(duration),
+            "-map", "0:a:0",
+            "-map", "0:v?",
+            "-map_metadata", "0"
+        ]
+        arguments += codecArguments
+
+        if let edgeFade, duration > edgeFade * 2 {
+            let fadeOutStart = ffmpegTime(duration - edgeFade)
+            arguments += ["-af", "afade=t=in:st=0:d=\(ffmpegTime(edgeFade)),afade=t=out:st=\(fadeOutStart):d=\(ffmpegTime(edgeFade))"]
+        }
+
+        arguments.append(destination.path)
+
+        let output = try await runProcess(ffmpegPath, arguments: arguments)
+        guard output.exitCode == 0 else {
+            throw AudioTrimError.ffmpegFailed(extractErrorMessage(from: output.stderr))
+        }
+    }
+
+    private func ffmpegTime(_ seconds: TimeInterval) -> String {
+        String(format: "%.6f", seconds)
+    }
+
     private func runProcess(_ executable: URL, arguments: [String]) async throws -> ProcessOutput {
         let processRegistry = self.processRegistry
         let processID = UUID()

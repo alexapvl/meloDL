@@ -10,8 +10,12 @@ final class DownloadSessionCoordinator: ObservableObject {
     @Published var selectedSessionID: UUID? {
         didSet {
             acknowledgeAttentionIfNeeded(forDeselected: oldValue, newSelection: selectedSessionID)
+            if let trimTarget, trimTarget.sessionID != selectedSessionID {
+                self.trimTarget = nil
+            }
         }
     }
+    @Published private(set) var trimTarget: TrimTarget?
     @Published private(set) var isIndexingTracks = false
     @Published var temporaryDownloadFolderPath: String?
 
@@ -121,7 +125,37 @@ final class DownloadSessionCoordinator: ObservableObject {
         scheduleWaitingSessions()
     }
 
+    func makeTrimTarget(forFileAt path: String?, title: String, in sessionID: UUID) -> TrimTarget? {
+        guard let path, FileManager.default.fileExists(atPath: path) else { return nil }
+        let fileURL = URL(fileURLWithPath: path)
+        guard let format = AudioTrimFormat(fileURL: fileURL) else { return nil }
+        return TrimTarget(sessionID: sessionID, fileURL: fileURL, title: title, format: format)
+    }
+
+    /// Single-track sessions only; playlists pick a track from the detail list.
+    func makeTrimTarget(for session: DownloadSession) -> TrimTarget? {
+        guard session.kind != .playlist,
+              let item = session.items.first(where: { $0.outputFilePath == session.firstExistingCompletedFilePath }) else { return nil }
+        return makeTrimTarget(forFileAt: item.outputFilePath, title: item.title, in: session.id)
+    }
+
+    func openTrimEditor(_ target: TrimTarget) {
+        selectedSessionID = target.sessionID
+        trimTarget = target
+    }
+
+    func closeTrimEditor() {
+        trimTarget = nil
+    }
+
+    func trimmedFileDidChange() {
+        schedulePostDownloadReindex()
+    }
+
     func removeSession(_ sessionID: UUID) {
+        if trimTarget?.sessionID == sessionID {
+            trimTarget = nil
+        }
         cancelSession(sessionID)
         sessions.removeAll { $0.id == sessionID }
         if selectedSessionID == sessionID {
