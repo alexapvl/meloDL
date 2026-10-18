@@ -21,7 +21,6 @@ actor DuplicateDetectionService {
         let candidates = try await indexStore.fetchCandidateTracks(forNormalizedTitle: normalizedTitle, limit: 250)
         guard !candidates.isEmpty else { return [] }
 
-        let sourceTokens = Set(Self.tokens(from: normalizedTitle))
         var matches: [DuplicateMatch] = []
 
         for candidate in candidates {
@@ -39,11 +38,7 @@ actor DuplicateDetectionService {
                 continue
             }
 
-            let candidateTokens = Set(Self.tokens(from: candidateTitle))
-            let jaccard = Self.jaccardSimilarity(sourceTokens, candidateTokens)
-            let levenshtein = Self.normalizedLevenshteinSimilarity(normalizedTitle, candidateTitle)
-
-            var score = (0.65 * levenshtein) + (0.35 * jaccard)
+            var score = Self.normalizedSimilarity(normalizedTitle, candidateTitle)
 
             if let expectedDurationSec,
                let candidateDuration = candidate.durationSec {
@@ -97,6 +92,15 @@ actor DuplicateDetectionService {
             .split(whereSeparator: \.isWhitespace)
             .map(String.init)
             .joined(separator: " ")
+    }
+
+    static func titleSimilarity(_ a: String, _ b: String) -> Double {
+        normalizedSimilarity(normalize(a), normalize(b))
+    }
+
+    private static func normalizedSimilarity(_ a: String, _ b: String) -> Double {
+        let jaccard = jaccardSimilarity(Set(tokens(from: a)), Set(tokens(from: b)))
+        return (0.65 * normalizedLevenshteinSimilarity(a, b)) + (0.35 * jaccard)
     }
 
     private static func tokens(from normalized: String) -> [String] {

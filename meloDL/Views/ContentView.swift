@@ -4,12 +4,12 @@ import SwiftUI
 struct ContentView: View {
     @ObservedObject private var appSettings: AppSettings
     @ObservedObject private var coordinator: DownloadSessionCoordinator
-    private let onOpenSettings: (() -> Void)?
+    private let onOpenSettings: ((SettingsDestination) -> Void)?
 
     init(
         appSettings: AppSettings,
         coordinator: DownloadSessionCoordinator,
-        onOpenSettings: (() -> Void)? = nil
+        onOpenSettings: ((SettingsDestination) -> Void)? = nil
     ) {
         self.appSettings = appSettings
         self.coordinator = coordinator
@@ -37,6 +37,11 @@ struct ContentView: View {
         .background(SessionTheme.contentBackground)
         .frame(minWidth: SessionLayout.windowMinWidth, minHeight: SessionLayout.windowMinHeight)
         .onAppear { coordinator.onAppear() }
+        .environment(\.openURL, OpenURLAction { url in
+            guard let destination = SettingsPathLink.destination(for: url), let onOpenSettings else { return .systemAction }
+            onOpenSettings(destination)
+            return .handled
+        })
         .onChange(of: appSettings.maxParallelSessions) {
             coordinator.maxParallelSessionsDidChange()
         }
@@ -46,7 +51,7 @@ struct ContentView: View {
 private struct SessionSidebar: View {
     @ObservedObject var appSettings: AppSettings
     @ObservedObject var coordinator: DownloadSessionCoordinator
-    let onOpenSettings: (() -> Void)?
+    let onOpenSettings: ((SettingsDestination) -> Void)?
     @Environment(\.controlActiveState) private var controlActiveState
     @Environment(\.compactWindowChrome) private var compactWindowChrome
     @State private var isSettingsHovered = false
@@ -346,7 +351,7 @@ private struct SessionSidebar: View {
     private var sidebarFooter: some View {
         SidebarFooterSection {
             if let onOpenSettings {
-                Button(action: onOpenSettings) {
+                Button { onOpenSettings(.downloads) } label: {
                     SidebarFooterButtonLabel(
                         title: "Settings",
                         systemImage: "gearshape",
@@ -573,12 +578,14 @@ private struct SessionDetailPane: View {
     @Environment(\.compactWindowChrome) private var compactWindowChrome
     @State private var isRemoveConfirming = false
     @State private var isConfirmingSkipRemaining = false
+    @State private var isConfirmingSkipRemainingMatches = false
 
     var body: some View {
         if let session {
             let reviewItem = coordinator.currentDuplicateReviewItem(for: session.id)
+            let matchReviewItem = reviewItem == nil ? coordinator.currentMatchReviewItem(for: session.id) : nil
             let trimTarget = coordinator.trimTarget.flatMap { $0.sessionID == session.id ? $0 : nil }
-            let isOverlayPresented = reviewItem != nil || trimTarget != nil
+            let isOverlayPresented = reviewItem != nil || matchReviewItem != nil || trimTarget != nil
             ZStack {
                 VStack(spacing: 0) {
                     header(for: session)
@@ -610,10 +617,14 @@ private struct SessionDetailPane: View {
                 } else if let reviewItem {
                     duplicateReviewOverlay(item: reviewItem, session: session)
                         .transition(.opacity.combined(with: .scale(scale: 0.98)))
+                } else if let matchReviewItem, let info = matchReviewItem.spotify {
+                    matchReviewOverlay(item: matchReviewItem, info: info, session: session)
+                        .transition(.opacity.combined(with: .scale(scale: 0.98)))
                 }
             }
             .background(SessionTheme.contentBackground)
             .animation(.easeInOut(duration: 0.18), value: reviewItem?.id)
+            .animation(.easeInOut(duration: 0.18), value: matchReviewItem?.id)
             .animation(.easeInOut(duration: 0.18), value: trimTarget?.id)
             .onChange(of: session.id) {
                 isRemoveConfirming = false
@@ -644,6 +655,13 @@ private struct SessionDetailPane: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                         .textSelection(.enabled)
+
+                    if let notice = session.notice {
+                        Label { Text(SettingsPathLink.linkify(notice)) } icon: { Image(systemName: "info.circle") }
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
             }
 
@@ -740,7 +758,6 @@ private struct SessionDetailPane: View {
 
                 if appSettings.showDuplicateReviewGestureTip {
                     swipeTipBanner
-                        .allowsHitTesting(false)
                 }
 
                 DuplicateReviewCard(
@@ -774,6 +791,71 @@ private struct SessionDetailPane: View {
         }
     }
 
+    private func matchReviewOverlay(item: DownloadSessionItem, info: SpotifyItemInfo, session: DownloadSession) -> some View {
+        let remaining = session.matchReviewRemaining
+
+        return ZStack {
+            Rectangle()
+                .fill(.black.opacity(0.18))
+                .ignoresSafeArea()
+
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Check YouTube Music Match")
+                            .font(.title3.weight(.semibold))
+                        Text("meloDL isn't sure this is the same song. Check it before downloading.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer(minLength: 16)
+
+                    VStack(alignment: .trailing, spacing: 8) {
+                        Text("\(remaining) left")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+
+                        Button("Skip remaining") {
+                            isConfirmingSkipRemainingMatches = true
+                        }
+                        .meloBorderedButton()
+                    }
+                }
+
+                SpotifyMatchReviewCard(
+                    info: info,
+                    matchURL: item.sourceURL,
+                    onSkip: { coordinator.skipCurrentMatch(for: session.id) },
+                    onDownload: { coordinator.acceptCurrentMatch(for: session.id) }
+                )
+                .id(item.id)
+            }
+            .padding(24)
+            .frame(maxWidth: 720)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(SessionTheme.cardStroke, lineWidth: 1)
+            }
+            .shadow(radius: 22, y: 12)
+            .padding(34)
+        }
+        .confirmationDialog(
+            "Skip remaining uncertain matches?",
+            isPresented: $isConfirmingSkipRemainingMatches,
+            titleVisibility: .visible
+        ) {
+            Button("Skip All", role: .destructive) {
+                coordinator.skipRemainingMatches(for: session.id)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The remaining \(remaining) tracks with uncertain matches will be skipped and won't be downloaded.")
+        }
+    }
+
     private func itemList(for session: DownloadSession) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(session.kind == .playlist ? "Tracks" : "Download")
@@ -782,10 +864,12 @@ private struct SessionDetailPane: View {
             VStack(spacing: 0) {
                 let sortedItems = session.items.sorted { $0.itemIndex < $1.itemIndex }
                 if sortedItems.isEmpty {
+                    let isAnimated = shouldAnimateEmptyItemListStatus(for: session)
                     ShimmeringStatusText(
                         text: emptyItemListStatusText(for: session),
                         font: .callout,
-                        isAnimated: shouldAnimateEmptyItemListStatus(for: session)
+                        isAnimated: isAnimated,
+                        lineLimit: isAnimated ? 1 : nil
                     )
                     .padding(14)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -847,7 +931,7 @@ private struct SessionDetailPane: View {
                 Text("Tip")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.primary.opacity(0.82))
-                Text("Swipe with two fingers or drag the card sideways while holding click. You can disable this tip in Settings > Behavior.")
+                Text(SettingsPathLink.linkify("Swipe with two fingers or drag the card sideways while holding click. You can disable this tip in Settings > Behavior."))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -967,6 +1051,9 @@ private struct SessionItemRow: View {
         if item.duplicateMatch != nil && item.status == .waitingForUser {
             return "Duplicate review needed"
         }
+        if item.needsMatchReview {
+            return "Match review needed"
+        }
         return item.status.displayText
     }
 
@@ -1021,13 +1108,15 @@ private struct ShimmeringStatusText: View {
     let text: String
     var font: Font = .caption2
     let isAnimated: Bool
+    var lineLimit: Int? = 1
     private let duration: TimeInterval = 1.65
 
     var body: some View {
-        Text(text)
+        Text(SettingsPathLink.linkify(text))
             .font(font)
             .foregroundStyle(.secondary)
-            .lineLimit(1)
+            .lineLimit(lineLimit)
+            .fixedSize(horizontal: false, vertical: lineLimit == nil)
             .overlay {
                 if isAnimated {
                     TimelineView(.animation) { timeline in

@@ -8,7 +8,7 @@ final class MenuBarController: NSObject {
     private let appSettings: AppSettings
     private let sessionCoordinator: DownloadSessionCoordinator
     private let onCheckAllUpdates: () -> Void
-    private let onOpenSettings: () -> Void
+    private let onOpenSettings: (SettingsDestination) -> Void
     private let onSwitchToDockMode: () -> Void
     private let onQuit: () -> Void
 
@@ -16,7 +16,7 @@ final class MenuBarController: NSObject {
         appSettings: AppSettings,
         sessionCoordinator: DownloadSessionCoordinator,
         onCheckAllUpdates: @escaping () -> Void,
-        onOpenSettings: @escaping () -> Void,
+        onOpenSettings: @escaping (SettingsDestination) -> Void,
         onSwitchToDockMode: @escaping () -> Void,
         onQuit: @escaping () -> Void
     ) {

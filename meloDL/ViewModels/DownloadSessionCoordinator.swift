@@ -165,7 +165,7 @@ final class DownloadSessionCoordinator: ObservableObject {
             do {
                 try await sessionStore.deleteSession(id: sessionID)
             } catch {
-                logger.error("Failed to delete session: \(error.localizedDescription)")
+                logger.failure("Failed to delete session: \(error.localizedDescription)")
             }
         }
     }
@@ -215,13 +215,10 @@ final class DownloadSessionCoordinator: ObservableObject {
             for index in session.items.indices where session.items[index].status == .waitingForUser && session.items[index].duplicateMatch != nil {
                 session.items[index].status = .skipped
             }
-            finalizeDuplicateReviewState(in: &session)
+            finalizeReviewState(in: &session)
         }
 
-        guard let session = sessions.first(where: { $0.id == sessionID }) else { return }
-        if session.status == .waitingForSlot {
-            scheduleWaitingSessions()
-        }
+        scheduleWaitingSessionsIfReady(sessionID)
     }
 
     func cancelActiveSessionsForQuitAndPersist() async {
@@ -249,7 +246,7 @@ final class DownloadSessionCoordinator: ObservableObject {
         do {
             try await sessionStore.save(changedSessions)
         } catch {
-            logger.error("Failed to persist quit cancellation state: \(error.localizedDescription)")
+            logger.failure("Failed to persist quit cancellation state: \(error.localizedDescription)")
         }
     }
 
@@ -270,7 +267,7 @@ final class DownloadSessionCoordinator: ObservableObject {
             }
             scheduleWaitingSessions()
         } catch {
-            logger.error("Failed to load sessions: \(error.localizedDescription)")
+            logger.failure("Failed to load sessions: \(error.localizedDescription)")
         }
     }
 
@@ -287,7 +284,7 @@ final class DownloadSessionCoordinator: ObservableObject {
                 await GitHubUpdateService.shared.checkForUpdatesIfNeeded()
             }
         } catch {
-            logger.error("Bootstrap failed: \(error.localizedDescription)")
+            logger.failure("Bootstrap failed: \(error.localizedDescription)")
         }
     }
 
@@ -310,7 +307,7 @@ final class DownloadSessionCoordinator: ObservableObject {
         for id in waitingIDs {
             guard activeSessionCount < cap else { return }
             guard let session = sessions.first(where: { $0.id == id }) else { continue }
-            guard !session.hasPendingDuplicateReview else { continue }
+            guard !session.hasPendingReview else { continue }
             let shouldSkipDuplicateCheck = !session.items.isEmpty
             startSession(id, skipDuplicateCheck: shouldSkipDuplicateCheck)
         }
@@ -339,11 +336,17 @@ final class DownloadSessionCoordinator: ObservableObject {
 
         let entries: [PlaylistEntry]
         if skipDuplicateCheck, !initialSession.items.isEmpty {
-            entries = initialSession.items
+            await rematchUnmatchedSpotifyItems(in: sessionID)
+            guard let refreshed = sessions.first(where: { $0.id == sessionID }) else { return }
+            entries = refreshed.items
                 .filter { $0.status == .queued }
-                .map { PlaylistEntry(url: $0.sourceURL, title: $0.title) }
+                .map(Self.entry(for:))
+        } else if let link = SpotifyLink(sourceURL) {
+            guard let resolved = await resolveSpotifySession(sessionID, link: link) else { return }
+            entries = resolved
         } else {
             entries = await engine.prefetchEntries(from: sourceURL)
+            applyResolvedEntries(entries, to: sessionID)
         }
 
         guard !Task.isCancelled else {
@@ -351,21 +354,8 @@ final class DownloadSessionCoordinator: ObservableObject {
             return
         }
 
-        applyResolvedEntries(entries, to: sessionID)
-
         if !skipDuplicateCheck && appSettings.duplicateDetectionEnabled {
             await checkDuplicates(for: sessionID, entries: entries)
-            guard let session = sessions.first(where: { $0.id == sessionID }) else { return }
-            if session.status == .waitingForUser {
-                activeTasks[sessionID] = nil
-                activeEngines[sessionID] = nil
-                notifyIfNeeded(
-                    title: "Download needs review",
-                    body: session.displayTitle
-                )
-                scheduleWaitingSessions()
-                return
-            }
         }
 
         guard !Task.isCancelled else {
@@ -374,13 +364,16 @@ final class DownloadSessionCoordinator: ObservableObject {
         }
 
         guard let session = sessions.first(where: { $0.id == sessionID }) else { return }
-        guard !session.hasPendingDuplicateReview else {
+        guard !session.hasPendingReview else {
             mutateSession(sessionID) { session in
-                session.status = .waitingForUser
-                session.attentionReason = .duplicateReview
+                finalizeReviewState(in: &session)
             }
             activeTasks[sessionID] = nil
             activeEngines[sessionID] = nil
+            notifyIfNeeded(
+                title: "Download needs review",
+                body: session.displayTitle
+            )
             scheduleWaitingSessions()
             return
         }
@@ -412,6 +405,200 @@ final class DownloadSessionCoordinator: ObservableObject {
         }
     }
 
+    // MARK: - Spotify
+
+    private static func entry(for item: DownloadSessionItem) -> PlaylistEntry {
+        PlaylistEntry(url: item.sourceURL, title: item.title, metadata: item.spotify?.track)
+    }
+
+    /// Resolves the Spotify link, matches every track on YouTube Music, and fills the session items.
+    /// Returns nil when the session failed or was cancelled.
+    private func resolveSpotifySession(_ sessionID: UUID, link: SpotifyLink) async -> [PlaylistEntry]? {
+        let collection: SpotifyCollection
+        do {
+            collection = try await SpotifyService.shared.resolve(link)
+            guard !collection.tracks.isEmpty else { throw SpotifyError.empty }
+        } catch {
+            endSessionTask(sessionID) {
+                failSession(sessionID, message: error.localizedDescription)
+            }
+            return nil
+        }
+
+        let isConnected = await SpotifyService.shared.connectedAccountName != nil
+        mutateSession(sessionID) { session in
+            session.kind = collection.tracks.count > 1 ? .playlist : .single
+            session.resolvedTitle = collection.name
+            session.displayTitle = collection.name
+            session.notice = collection.isTruncated
+                ? (isConnected
+                    ? "Spotify only shares the first \(SpotifyService.embedTrackLimit) songs of playlists you don't own or collaborate on."
+                    : "Spotify only shares the first \(SpotifyService.embedTrackLimit) songs of playlists without logging in.\nConnect Spotify in Settings > Spotify to download your own playlists in full.")
+                : nil
+        }
+
+        let results = await matchOnYouTubeMusic(collection.tracks)
+        guard !Task.isCancelled else {
+            finishCancelledSession(sessionID)
+            return nil
+        }
+
+        var claimedURLs = Set<String>()
+        let items = collection.tracks.enumerated().map { index, track in
+            var item = DownloadSessionItem(
+                sourceURL: track.webURL,
+                title: track.displayTitle,
+                itemIndex: index,
+                spotify: SpotifyItemInfo(track: track, needsReview: false)
+            )
+            apply(results[index], to: &item, claimedURLs: &claimedURLs)
+            return item
+        }
+
+        mutateSession(sessionID) { session in
+            session.items = items
+        }
+        let entries = items.filter { $0.status == .queued || $0.status == .waitingForUser }.map(Self.entry(for:))
+        guard !entries.isEmpty else {
+            endSessionTask(sessionID) {
+                failSession(sessionID, message: items.first?.errorMessage ?? "No songs from this link were found on YouTube Music.")
+            }
+            return nil
+        }
+        return entries
+    }
+
+    /// Retry path: tracks that never got a YouTube Music match are searched again.
+    private func rematchUnmatchedSpotifyItems(in sessionID: UUID) async {
+        guard let session = sessions.first(where: { $0.id == sessionID }) else { return }
+        let unmatched = session.items.filter { $0.status == .queued && $0.spotify != nil && SpotifyLink($0.sourceURL) != nil }
+        guard !unmatched.isEmpty else { return }
+
+        let results = await matchOnYouTubeMusic(unmatched.compactMap { $0.spotify?.track })
+        mutateSession(sessionID) { session in
+            var claimedURLs = Set(session.items.map(\.sourceURL))
+            for (offset, original) in unmatched.enumerated() {
+                guard let index = session.items.firstIndex(where: { $0.id == original.id }) else { continue }
+                apply(results[offset], to: &session.items[index], claimedURLs: &claimedURLs)
+            }
+        }
+    }
+
+    private func apply(
+        _ result: Result<YouTubeMusicMatch?, Error>,
+        to item: inout DownloadSessionItem,
+        claimedURLs: inout Set<String>
+    ) {
+        switch result {
+        case .success(let match?) where !claimedURLs.contains(match.candidate.url):
+            claimedURLs.insert(match.candidate.url)
+            let needsReview = match.score < YouTubeMusicMatcher.autoAcceptScore
+            item.sourceURL = match.candidate.url
+            item.status = needsReview ? .waitingForUser : .queued
+            item.errorMessage = nil
+            item.spotify?.matchTitle = match.candidate.title
+            item.spotify?.matchArtists = match.candidate.artists.joined(separator: ", ")
+            item.spotify?.matchDurationSec = match.candidate.durationSec
+            item.spotify?.matchScore = match.score
+            item.spotify?.needsReview = needsReview
+        case .success(let match?):
+            item.status = .skipped
+            item.errorMessage = "Same YouTube Music song as another track: \(match.candidate.title)"
+        case .success(nil):
+            item.status = .failed
+            item.errorMessage = "No match found on YouTube Music"
+        case .failure(let error):
+            item.status = .failed
+            item.errorMessage = error.localizedDescription
+        }
+    }
+
+    private func matchOnYouTubeMusic(_ tracks: [SpotifyTrack]) async -> [Result<YouTubeMusicMatch?, Error>] {
+        let concurrency = 2
+        return await withTaskGroup(of: (Int, Result<YouTubeMusicMatch?, Error>).self) { group in
+            var results = [Result<YouTubeMusicMatch?, Error>](repeating: .success(nil), count: tracks.count)
+            var nextIndex = 0
+
+            func enqueueNext() {
+                guard nextIndex < tracks.count, !Task.isCancelled else { return }
+                let index = nextIndex
+                let track = tracks[index]
+                nextIndex += 1
+                group.addTask {
+                    do {
+                        return (index, .success(try await YouTubeMusicMatcher.shared.bestMatch(for: track)))
+                    } catch {
+                        return (index, .failure(error))
+                    }
+                }
+            }
+
+            for _ in 0 ..< concurrency {
+                enqueueNext()
+            }
+            while let (index, result) = await group.next() {
+                results[index] = result
+                enqueueNext()
+            }
+            return results
+        }
+    }
+
+    private func endSessionTask(_ sessionID: UUID, _ update: () -> Void) {
+        update()
+        activeTasks[sessionID] = nil
+        activeEngines[sessionID] = nil
+        scheduleWaitingSessions()
+    }
+
+    func currentMatchReviewItem(for sessionID: UUID) -> DownloadSessionItem? {
+        sessions.first { $0.id == sessionID }?.items
+            .sorted { $0.itemIndex < $1.itemIndex }
+            .first(where: \.needsMatchReview)
+    }
+
+    func acceptCurrentMatch(for sessionID: UUID) {
+        resolveCurrentMatch(for: sessionID, accept: true)
+    }
+
+    func skipCurrentMatch(for sessionID: UUID) {
+        resolveCurrentMatch(for: sessionID, accept: false)
+    }
+
+    func skipRemainingMatches(for sessionID: UUID) {
+        mutateSession(sessionID) { session in
+            for index in session.items.indices where session.items[index].needsMatchReview {
+                session.items[index].status = .skipped
+            }
+            finalizeReviewState(in: &session)
+        }
+        scheduleWaitingSessionsIfReady(sessionID)
+    }
+
+    private func resolveCurrentMatch(for sessionID: UUID, accept: Bool) {
+        guard let itemID = currentMatchReviewItem(for: sessionID)?.id else { return }
+        mutateSession(sessionID) { session in
+            guard let index = session.items.firstIndex(where: { $0.id == itemID }) else { return }
+            if accept {
+                session.items[index].spotify?.needsReview = false
+                session.items[index].status = .queued
+            } else {
+                session.items[index].status = .skipped
+            }
+            finalizeReviewState(in: &session)
+        }
+        scheduleWaitingSessionsIfReady(sessionID)
+    }
+
+    private func scheduleWaitingSessionsIfReady(_ sessionID: UUID) {
+        guard let session = sessions.first(where: { $0.id == sessionID }) else { return }
+        if session.status == .waitingForSlot {
+            scheduleWaitingSessions()
+        }
+    }
+
+    // MARK: - Duplicates
+
     private func checkDuplicates(for sessionID: UUID, entries: [PlaylistEntry]) async {
         mutateSession(sessionID) { session in
             session.status = .checkingDuplicates
@@ -425,7 +612,10 @@ final class DownloadSessionCoordinator: ObservableObject {
             var duplicateSnapshotsByURL: [String: DuplicateMatchSnapshot] = [:]
 
             for entry in entries {
-                let matches = try await duplicateDetectionService.findPotentialDuplicates(title: entry.title)
+                let matches = try await duplicateDetectionService.findPotentialDuplicates(
+                    title: entry.title,
+                    expectedDurationSec: entry.metadata?.durationSec
+                )
                 if let first = matches.first {
                     duplicateSnapshotsByURL[entry.url] = DuplicateMatchSnapshot(match: first)
                 }
@@ -454,7 +644,7 @@ final class DownloadSessionCoordinator: ObservableObject {
                 }
             }
         } catch {
-            logger.error("Duplicate check failed: \(error.localizedDescription)")
+            logger.failure("Duplicate check failed: \(error.localizedDescription)")
             mutateSession(sessionID) { session in
                 for index in session.items.indices where session.items[index].status == .checkingDuplicates {
                     session.items[index].status = .queued
@@ -489,7 +679,8 @@ final class DownloadSessionCoordinator: ObservableObject {
                     config: config,
                     audioSettings: appSettings.audioSettings,
                     preloadedTitle: entry.title,
-                    deferTitleResolution: false
+                    deferTitleResolution: false,
+                    metadata: entry.metadata
                 )
                 for try await event in stream {
                     handle(event, for: sessionID)
@@ -618,6 +809,7 @@ final class DownloadSessionCoordinator: ObservableObject {
     }
 
     private func failSession(_ sessionID: UUID, message: String) {
+        logger.failure("Session failed: \(message)")
         mutateSession(sessionID) { session in
             session.status = .failed
             session.attentionReason = .failed
@@ -643,25 +835,25 @@ final class DownloadSessionCoordinator: ObservableObject {
         mutateSession(sessionID) { session in
             guard let itemIndex = session.items.firstIndex(where: { $0.status == .waitingForUser && $0.duplicateMatch != nil }) else { return }
             if shouldDownload {
-                session.items[itemIndex].status = .queued
+                session.items[itemIndex].status = session.items[itemIndex].spotify?.needsReview == true ? .waitingForUser : .queued
                 session.items[itemIndex].duplicateMatch = nil
             } else {
                 session.items[itemIndex].status = .skipped
             }
 
-            finalizeDuplicateReviewState(in: &session)
+            finalizeReviewState(in: &session)
         }
 
-        guard let session = sessions.first(where: { $0.id == sessionID }) else { return }
-        if session.status == .waitingForSlot {
-            scheduleWaitingSessions()
-        }
+        scheduleWaitingSessionsIfReady(sessionID)
     }
 
-    private func finalizeDuplicateReviewState(in session: inout DownloadSession) {
-        if session.items.contains(where: { $0.status == .waitingForUser && $0.duplicateMatch != nil }) {
+    private func finalizeReviewState(in session: inout DownloadSession) {
+        if session.hasPendingDuplicateReview {
             session.status = .waitingForUser
             session.attentionReason = .duplicateReview
+        } else if session.hasPendingMatchReview {
+            session.status = .waitingForUser
+            session.attentionReason = .matchReview
         } else {
             session.attentionReason = nil
             let hasQueued = session.items.contains { $0.status == .queued }
@@ -703,7 +895,7 @@ final class DownloadSessionCoordinator: ObservableObject {
             do {
                 try await sessionStore.save(session)
             } catch {
-                logger.error("Failed to persist session: \(error.localizedDescription)")
+                logger.failure("Failed to persist session: \(error.localizedDescription)")
             }
         }
     }

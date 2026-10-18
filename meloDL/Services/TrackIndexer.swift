@@ -83,7 +83,7 @@ actor TrackIndexer {
                     defaults.set(Date().timeIntervalSince1970, forKey: lastIndexKey)
                     logger.info("Reindex finished. Indexed \(indexedCount) files across \(roots.count) roots.")
                 } catch {
-                    logger.error("Reindex failed: \(error.localizedDescription)")
+                    logger.failure("Reindex failed: \(error.localizedDescription)")
                 }
             }
 
@@ -102,7 +102,7 @@ actor TrackIndexer {
         do {
             return try await store.countTracks() == 0
         } catch {
-            logger.error("Failed to count tracks before reindex decision: \(error.localizedDescription)")
+            logger.failure("Failed to count tracks before reindex decision: \(error.localizedDescription)")
             return true
         }
     }

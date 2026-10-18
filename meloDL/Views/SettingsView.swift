@@ -10,7 +10,7 @@ struct SettingsView: View {
     #if DEBUG
     let onReplayOnboarding: () -> Void
     #endif
-    @State private var selection: SettingsDestination = .downloads
+    @State private var selection: SettingsDestination
     @State private var isBackButtonHovered = false
     @State private var pendingDestination: SettingsDestination?
     @State private var showLeaveDuplicatesDialog = false
@@ -20,12 +20,14 @@ struct SettingsView: View {
     init(
         updater: SPUUpdater,
         appSettings: AppSettings,
+        initialDestination: SettingsDestination = .downloads,
         onDismiss: @escaping () -> Void = {},
         onReplayOnboarding: (() -> Void)? = nil
     ) {
         self.updater = updater
         self.appSettings = appSettings
         self.onDismiss = onDismiss
+        _selection = State(initialValue: initialDestination)
         _indexingViewModel = StateObject(wrappedValue: IndexingSettingsViewModel(appSettings: appSettings))
         #if DEBUG
         self.onReplayOnboarding = onReplayOnboarding ?? {}
@@ -158,6 +160,8 @@ struct SettingsView: View {
             DownloadsSettingsView(appSettings: appSettings)
         case .behavior:
             BehaviorSettingsView(appSettings: appSettings)
+        case .spotify:
+            SpotifySettingsView()
         case .indexing:
             IndexingSettingsView(appSettings: appSettings, viewModel: indexingViewModel)
         case .duplicates:
@@ -225,9 +229,10 @@ private struct SettingsSidebarRow: View {
     }
 }
 
-private enum SettingsDestination: CaseIterable {
+enum SettingsDestination: String, CaseIterable {
     case downloads
     case behavior
+    case spotify
     case indexing
     case duplicates
     case updates
@@ -242,6 +247,7 @@ private enum SettingsDestination: CaseIterable {
         switch self {
         case .downloads: return "Downloads"
         case .behavior: return "Behavior"
+        case .spotify: return "Spotify"
         case .indexing: return "Indexing"
         case .duplicates: return "Duplicates"
         case .updates: return "Updates"
@@ -258,6 +264,7 @@ private enum SettingsDestination: CaseIterable {
         switch self {
         case .downloads: return "arrow.down.circle"
         case .behavior: return "switch.2"
+        case .spotify: return "music.note.list"
         case .indexing: return "magnifyingglass"
         case .duplicates: return "doc.on.doc"
         case .updates: return "arrow.triangle.2.circlepath"
@@ -660,6 +667,151 @@ struct BehaviorSettingsView: View {
                 showsRestartPrompt: true
             )
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+struct SpotifySettingsView: View {
+    @State private var connectedName: String?
+    @State private var clientID = ""
+    @State private var isConnecting = false
+    @State private var errorMessage: String?
+    @State private var connectTask: Task<Void, Never>?
+
+    private var trimmedClientID: String {
+        clientID.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var body: some View {
+        SettingsPage(title: "Spotify", subtitle: "Download songs from Spotify links. meloDL finds each song on YouTube Music.") {
+            SettingsSection(title: "Without Connecting") {
+                SettingsTextBlock(text: "Paste a Spotify link to download tracks, albums and public playlists. Spotify only shares the first \(SpotifyService.embedTrackLimit) songs of a playlist this way. Connect to also download your own playlists in full, including private ones, and your Liked Songs.")
+            }
+
+            if let connectedName {
+                SettingsSection(title: "Account") {
+                    SettingsRow(title: "Connected as \(connectedName)", description: "Your own playlists and Liked Songs download in full, with album, year and track number tags.") {
+                        Button("Disconnect", role: .destructive) {
+                            Task {
+                                await SpotifyService.shared.disconnect()
+                                self.connectedName = nil
+                            }
+                        }
+                        .meloBorderedButton(destructive: true)
+                    }
+                }
+            } else {
+                setupGuide
+            }
+        }
+        .task {
+            connectedName = await SpotifyService.shared.connectedAccountName
+            if clientID.isEmpty {
+                clientID = await SpotifyService.shared.connectedClientID ?? ""
+            }
+        }
+        .onDisappear {
+            connectTask?.cancel()
+        }
+    }
+
+    @ViewBuilder
+    private var setupGuide: some View {
+        SettingsSection(title: "1. Create a Spotify App") {
+            SettingsRow(
+                title: "Open the Spotify Developer Dashboard",
+                description: "Log in and click Create app. Your Spotify account needs Premium. This is a Spotify rule for personal developer apps."
+            ) {
+                Button("Open Dashboard") {
+                    NSWorkspace.shared.open(SpotifyAuthService.dashboardURL)
+                }
+                .meloBorderedButton()
+            }
+        }
+
+        SettingsSection(title: "2. Fill In the Form") {
+            copyRow(title: "App name", value: "meloDL")
+            SettingsDivider()
+            copyRow(title: "App description", value: "Personal meloDL downloads")
+            SettingsDivider()
+            copyRow(title: "Redirect URI", value: SpotifyAuthService.redirectURI, description: "Paste it, then click Add.")
+            SettingsDivider()
+            SettingsRow(title: "Which API/SDKs are you planning to use?", description: "Tick Web API, accept the terms, then click Save.") {
+                EmptyView()
+            }
+        }
+
+        SettingsSection(title: "3. Paste Your Client ID") {
+            SettingsRow(
+                title: "Client ID",
+                description: clientIDHint
+            ) {
+                TextField("32-character code", text: $clientID)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.callout.monospaced())
+                    .frame(width: 290)
+            }
+        }
+
+        SettingsSection(title: "4. Connect") {
+            SettingsRow(
+                title: isConnecting ? "Waiting for Spotify login in your browser…" : "Log in with Spotify",
+                description: errorMessage ?? "Your browser opens Spotify's login page. Approve access, then come back here."
+            ) {
+                if isConnecting {
+                    Button("Cancel") {
+                        connectTask?.cancel()
+                    }
+                    .meloBorderedButton()
+                } else {
+                    Button("Connect Spotify") {
+                        connect()
+                    }
+                    .meloBorderedButton()
+                    .disabled(!SpotifyAuthService.isValidClientID(trimmedClientID))
+                }
+            }
+        }
+    }
+
+    private var clientIDHint: String {
+        if trimmedClientID.isEmpty {
+            return "In your app on the dashboard, open Settings and copy the Client ID."
+        }
+        return SpotifyAuthService.isValidClientID(trimmedClientID)
+            ? "Looks good."
+            : "A Client ID is 32 letters and numbers. Check that you copied the Client ID, not the Client secret."
+    }
+
+    private func copyRow(title: String, value: String, description: String? = nil) -> some View {
+        SettingsRow(title: title, description: description) {
+            HStack(spacing: 8) {
+                Text(value)
+                    .font(.callout.monospaced())
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                Button("Copy") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(value, forType: .string)
+                }
+                .meloBorderedButton()
+            }
+        }
+    }
+
+    private func connect() {
+        let clientID = trimmedClientID
+        errorMessage = nil
+        isConnecting = true
+        connectTask = Task {
+            do {
+                connectedName = try await SpotifyAuthService.connect(clientID: clientID)
+            } catch is CancellationError {
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+            isConnecting = false
+            NSApplication.shared.activate(ignoringOtherApps: true)
         }
     }
 }
@@ -1197,7 +1349,6 @@ private struct DuplicatesSettingsView: View {
             countStyle: .file
         )
 
-        let rekordboxGroups = viewModel.smartCleanupGroupCount(for: .rekordboxOnly)
         let rekordboxFiles = viewModel.smartCleanupCandidateCount(for: .rekordboxOnly)
         let rekordboxReclaim = ByteCountFormatter.string(
             fromByteCount: viewModel.smartCleanupEstimatedReclaimBytes(for: .rekordboxOnly),
@@ -1435,6 +1586,19 @@ struct SupportSettingsView: View {
 
                 SettingsRow(title: "GitHub Issues", description: "Report bugs or request changes.") {
                     SecondaryHoverLink(title: "Open issues", url: URL(string: "https://github.com/alexapvl/meloDL/issues")!)
+                }
+
+                SettingsDivider()
+
+                SettingsRow(
+                    title: "Error Log",
+                    description: "meloDL records errors in a file on your Mac. When reporting a problem, attach it to your email or GitHub issue. It can include song names, links and file paths."
+                ) {
+                    Button("Show in Finder") {
+                        ErrorLog.ensureFileExists()
+                        NSWorkspace.shared.activateFileViewerSelecting([ErrorLog.fileURL])
+                    }
+                    .meloBorderedButton()
                 }
             }
         }

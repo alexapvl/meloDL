@@ -73,7 +73,7 @@ final class TrimEditorViewModel: ObservableObject {
                 self.waveform = waveform
                 phase = .ready
             } catch {
-                logger.error("Failed to load trim editor: \(error.localizedDescription)")
+                logger.failure("Failed to load trim editor: \(error.localizedDescription)")
                 phase = .failed("Couldn't read this file. \(error.localizedDescription)")
             }
         }
@@ -257,7 +257,7 @@ final class TrimEditorViewModel: ObservableObject {
                 onFileChanged()
             } catch {
                 try? FileManager.default.removeItem(at: tempURL)
-                logger.error("Trim failed: \(error.localizedDescription)")
+                logger.failure("Trim failed: \(error.localizedDescription)")
                 saveErrorMessage = error.localizedDescription
                 phase = .ready
             }

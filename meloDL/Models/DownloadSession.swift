@@ -15,6 +15,7 @@ struct DownloadSession: Identifiable, Sendable {
     var items: [DownloadSessionItem]
     var errorMessage: String?
     var attentionAcknowledged: Bool
+    var notice: String?
 
     init(
         id: UUID = UUID(),
@@ -30,7 +31,8 @@ struct DownloadSession: Identifiable, Sendable {
         format: AudioFormat,
         items: [DownloadSessionItem] = [],
         errorMessage: String? = nil,
-        attentionAcknowledged: Bool = false
+        attentionAcknowledged: Bool = false,
+        notice: String? = nil
     ) {
         self.id = id
         self.sourceURL = sourceURL
@@ -46,10 +48,11 @@ struct DownloadSession: Identifiable, Sendable {
         self.items = items
         self.errorMessage = errorMessage
         self.attentionAcknowledged = attentionAcknowledged
+        self.notice = notice
     }
 
     var needsAttention: Bool {
-        if status == .waitingForUser || attentionReason == .duplicateReview {
+        if status == .waitingForUser || attentionReason == .duplicateReview || attentionReason == .matchReview {
             return true
         }
         if status == .failed || status == .completedWithErrors {
@@ -129,6 +132,18 @@ struct DownloadSession: Identifiable, Sendable {
         duplicateReviewRemaining > 0
     }
 
+    var matchReviewRemaining: Int {
+        items.filter(\.needsMatchReview).count
+    }
+
+    var hasPendingMatchReview: Bool {
+        matchReviewRemaining > 0
+    }
+
+    var hasPendingReview: Bool {
+        hasPendingDuplicateReview || hasPendingMatchReview
+    }
+
     var duplicateReviewPosition: Int {
         let total = duplicateReviewTotal
         guard total > 0 else { return 1 }
@@ -191,6 +206,7 @@ enum DownloadSessionStatus: String, Sendable {
 
 enum SessionAttentionReason: String, Sendable {
     case duplicateReview
+    case matchReview
     case failed
 }
 
@@ -204,6 +220,7 @@ struct DownloadSessionItem: Identifiable, Sendable {
     var errorMessage: String?
     var itemIndex: Int
     var hadDuplicateMatch: Bool
+    var spotify: SpotifyItemInfo?
 
     init(
         id: UUID = UUID(),
@@ -214,7 +231,8 @@ struct DownloadSessionItem: Identifiable, Sendable {
         duplicateMatch: DuplicateMatchSnapshot? = nil,
         errorMessage: String? = nil,
         itemIndex: Int,
-        hadDuplicateMatch: Bool = false
+        hadDuplicateMatch: Bool = false,
+        spotify: SpotifyItemInfo? = nil
     ) {
         self.id = id
         self.sourceURL = sourceURL
@@ -225,10 +243,16 @@ struct DownloadSessionItem: Identifiable, Sendable {
         self.errorMessage = errorMessage
         self.itemIndex = itemIndex
         self.hadDuplicateMatch = hadDuplicateMatch
+        self.spotify = spotify
     }
 
     var isSkippedDuplicate: Bool {
-        status == .skipped && duplicateMatch != nil
+        status == .skipped && (duplicateMatch != nil || spotify != nil)
+    }
+
+    /// Duplicate review goes first; match review shows once the item has no duplicate pending.
+    var needsMatchReview: Bool {
+        status == .waitingForUser && duplicateMatch == nil && spotify?.needsReview == true
     }
 }
 

@@ -45,7 +45,7 @@ final class AudioPreviewPlayer: ObservableObject {
             do {
                 try engine.start()
             } catch {
-                logger.error("Failed to start audio engine: \(error.localizedDescription)")
+                logger.failure("Failed to start audio engine: \(error.localizedDescription)")
                 return
             }
         }

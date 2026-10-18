@@ -4,6 +4,7 @@ import os
 struct PlaylistEntry: Sendable {
     let url: String
     let title: String
+    var metadata: SpotifyTrack? = nil
 }
 
 enum DownloadEvent: Sendable {
@@ -41,7 +42,8 @@ final class DownloadEngine {
         config: DownloadConfiguration,
         audioSettings: AudioSettings,
         preloadedTitle: String? = nil,
-        deferTitleResolution: Bool = false
+        deferTitleResolution: Bool = false,
+        metadata: SpotifyTrack? = nil
     ) -> AsyncThrowingStream<DownloadEvent, Error> {
         AsyncThrowingStream { continuation in
             let streamGuard = StreamEmissionGuard()
@@ -63,7 +65,7 @@ final class DownloadEngine {
                     } else {
                         title = await resolveSingleTitle(for: url)
                     }
-                    let entry = PlaylistEntry(url: url, title: title)
+                    let entry = PlaylistEntry(url: url, title: title, metadata: metadata)
                     let event = try await runSingleDownload(
                         entry: entry,
                         config: config,
@@ -77,6 +79,7 @@ final class DownloadEngine {
                     continuation.finish()
                 } catch {
                     if !(error is CancellationError) && !Task.isCancelled {
+                        self.logger.failure("Item threw \(url): \(error.localizedDescription)")
                         continuation.yield(.error(url: url, message: error.localizedDescription, worker: nil))
                     }
                     await streamGuard.close()
@@ -111,7 +114,7 @@ final class DownloadEngine {
 
             return title
         } catch {
-            logger.error("Single title probe failed: \(error.localizedDescription)")
+            logger.failure("Single title probe failed: \(error.localizedDescription)")
             return url
         }
     }
@@ -174,6 +177,7 @@ final class DownloadEngine {
                                         continuation.yield(event)
                                     } catch {
                                         guard !Task.isCancelled else { return }
+                                        self.logger.failure("Item threw \(entry.url): \(error.localizedDescription)")
                                         continuation.yield(.error(url: entry.url, message: error.localizedDescription, worker: workerID))
                                     }
 
@@ -212,7 +216,7 @@ final class DownloadEngine {
                 return entries
             }
         } catch {
-            logger.error("Prefetch playlist entries failed: \(error.localizedDescription)")
+            logger.failure("Prefetch playlist entries failed: \(error.localizedDescription)")
         }
 
         let title = await resolveSingleTitle(for: url)
@@ -235,10 +239,11 @@ final class DownloadEngine {
 
         continuation.yield(.started(url: entry.url, title: entry.title, worker: workerID))
 
+        let filenameTemplate = entry.metadata.map { Self.literalFilename($0.displayTitle) } ?? "%(track,title)s"
         var arguments = [
             entry.url,
             "--ffmpeg-location", ffmpegPath.path,
-            "--output", "\(outputFolder.path)/%(track,title)s.%(ext)s",
+            "--output", "\(outputFolder.path)/\(filenameTemplate).%(ext)s",
             "--print", "after_move:filepath",
             "--no-playlist",
             "--extract-audio",
@@ -248,6 +253,9 @@ final class DownloadEngine {
 
         if audioSettings.embedMetadata {
             arguments.append("--embed-metadata")
+            if let metadata = entry.metadata {
+                arguments += Self.metadataOverrideArguments(for: metadata)
+            }
         }
 
         if audioSettings.embedThumbnail {
@@ -265,8 +273,36 @@ final class DownloadEngine {
 
         let errorMsg = extractErrorMessage(from: output.stderr)
         let totalMs = Int(Date().timeIntervalSince(startedAt) * 1_000)
-        logger.error("Item failed \(entry.url, privacy: .public) after \(totalMs)ms: \(errorMsg, privacy: .public)")
+        let stderrTail = output.stderr.suffix(800)
+        logger.failure("Item failed \(entry.url) after \(totalMs)ms, exit \(output.exitCode): \(errorMsg)\nstderr: \(stderrTail)")
         return .error(url: entry.url, message: errorMsg, worker: workerID)
+    }
+
+    /// Output-template literal: `%` is the template sigil and `/` would create folders.
+    static func literalFilename(_ name: String) -> String {
+        name
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: "%", with: "%%")
+    }
+
+    /// `--parse-metadata` with a literal FROM; the empty `%(meloDL|)s` field forces template parsing.
+    static func metadataOverrideArguments(for track: SpotifyTrack) -> [String] {
+        let fields: [(String, String?)] = [
+            ("meta_title", track.title),
+            ("meta_artist", track.artistLine),
+            ("meta_album", track.album),
+            ("meta_album_artist", track.albumArtist),
+            ("meta_date", track.releaseDate),
+            ("meta_track", track.trackNumber.map(String.init))
+        ]
+        return fields.flatMap { field, value -> [String] in
+            guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return [] }
+            let literal = value
+                .replacingOccurrences(of: "%", with: "%%")
+                .replacingOccurrences(of: ":", with: "\\:")
+                .replacingOccurrences(of: "\n", with: " ")
+            return ["--parse-metadata", "\(literal)%(meloDL|)s:%(\(field))s"]
+        }
     }
 
     private func completedFilepath(from output: ProcessOutput) -> String? {

@@ -25,7 +25,7 @@ actor DownloadSessionStore {
         let itemsBySession = try fetchItemsBySession()
         let sql = """
         SELECT id, source_url, kind, display_title, resolved_title, status, attention_reason,
-               created_at, completed_at, output_folder_path, format, error_message, attention_acknowledged
+               created_at, completed_at, output_folder_path, format, error_message, attention_acknowledged, notice
         FROM sessions
         ORDER BY created_at DESC;
         """
@@ -68,7 +68,8 @@ actor DownloadSessionStore {
                     format: format,
                     items: itemsBySession[id] ?? [],
                     errorMessage: errorMessage,
-                    attentionAcknowledged: attentionAcknowledged
+                    attentionAcknowledged: attentionAcknowledged,
+                    notice: sqliteOptionalText(statement, column: 13)
                 )
             )
         }
@@ -191,6 +192,8 @@ actor DownloadSessionStore {
             column: "attention_acknowledged",
             definition: "INTEGER NOT NULL DEFAULT 0"
         )
+        try addColumnIfNotExists(table: "sessions", column: "notice", definition: "TEXT")
+        try addColumnIfNotExists(table: "session_items", column: "spotify_json", definition: "TEXT")
         try execute(sql: """
         UPDATE session_items
         SET had_duplicate_match = 1
@@ -212,9 +215,9 @@ actor DownloadSessionStore {
         let sql = """
         INSERT OR REPLACE INTO sessions (
             id, source_url, kind, display_title, resolved_title, status, attention_reason,
-            created_at, completed_at, output_folder_path, format, error_message, attention_acknowledged
+            created_at, completed_at, output_folder_path, format, error_message, attention_acknowledged, notice
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """
         var statement: OpaquePointer?
         defer { sqlite3_finalize(statement) }
@@ -236,6 +239,7 @@ actor DownloadSessionStore {
         bindText(statement, 11, session.format.rawValue)
         bindOptionalText(statement, 12, session.errorMessage)
         sqlite3_bind_int(statement, 13, session.attentionAcknowledged ? 1 : 0)
+        bindOptionalText(statement, 14, session.notice)
 
         guard sqlite3_step(statement) == SQLITE_DONE else {
             throw makeError(message: "Failed to upsert session")
@@ -258,9 +262,9 @@ actor DownloadSessionStore {
         INSERT INTO session_items (
             id, session_id, source_url, title, status, output_file_path,
             duplicate_candidate_path, duplicate_candidate_title, duplicate_confidence,
-            duplicate_score, duplicate_reason, error_message, item_index, had_duplicate_match
+            duplicate_score, duplicate_reason, error_message, item_index, had_duplicate_match, spotify_json
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """
         var insertStatement: OpaquePointer?
         defer { sqlite3_finalize(insertStatement) }
@@ -286,6 +290,11 @@ actor DownloadSessionStore {
             bindOptionalText(insertStatement, 12, item.errorMessage)
             sqlite3_bind_int64(insertStatement, 13, Int64(item.itemIndex))
             sqlite3_bind_int(insertStatement, 14, item.hadDuplicateMatch ? 1 : 0)
+            bindOptionalText(
+                insertStatement,
+                15,
+                item.spotify.flatMap { try? JSONEncoder().encode($0) }.flatMap { String(data: $0, encoding: .utf8) }
+            )
 
             guard sqlite3_step(insertStatement) == SQLITE_DONE else {
                 throw makeError(message: "Failed to insert session item")
@@ -297,7 +306,7 @@ actor DownloadSessionStore {
         let sql = """
         SELECT session_id, id, source_url, title, status, output_file_path,
                duplicate_candidate_path, duplicate_candidate_title, duplicate_confidence,
-               duplicate_score, duplicate_reason, error_message, item_index, had_duplicate_match
+               duplicate_score, duplicate_reason, error_message, item_index, had_duplicate_match, spotify_json
         FROM session_items
         ORDER BY session_id ASC, item_index ASC;
         """
@@ -349,7 +358,9 @@ actor DownloadSessionStore {
                 duplicateMatch: duplicateMatch,
                 errorMessage: sqliteOptionalText(statement, column: 11),
                 itemIndex: Int(sqlite3_column_int64(statement, 12)),
-                hadDuplicateMatch: sqlite3_column_int(statement, 13) != 0 || duplicateMatch != nil
+                hadDuplicateMatch: sqlite3_column_int(statement, 13) != 0 || duplicateMatch != nil,
+                spotify: sqliteOptionalText(statement, column: 14)
+                    .flatMap { try? JSONDecoder().decode(SpotifyItemInfo.self, from: Data($0.utf8)) }
             )
             result[sessionID, default: []].append(item)
         }

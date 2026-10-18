@@ -114,7 +114,7 @@ actor BinaryManager {
             decoder.dateDecodingStrategy = .iso8601
             versions = try decoder.decode(BinaryVersions.self, from: data)
         } catch {
-            logger.error("Failed to load versions.json: \(error.localizedDescription)")
+            logger.failure("Failed to load versions.json: \(error.localizedDescription)")
         }
     }
 

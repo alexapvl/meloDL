@@ -53,7 +53,7 @@ final class DownloadNotificationService {
             do {
                 try await addRequest(request)
             } catch {
-                logger.error("Failed to schedule notification: \(error.localizedDescription)")
+                logger.failure("Failed to schedule notification: \(error.localizedDescription)")
             }
         }
     }
@@ -77,7 +77,7 @@ final class DownloadNotificationService {
             do {
                 try await addRequest(request)
             } catch {
-                logger.error("Failed to schedule session notification: \(error.localizedDescription)")
+                logger.failure("Failed to schedule session notification: \(error.localizedDescription)")
             }
         }
     }
@@ -108,7 +108,7 @@ final class DownloadNotificationService {
             do {
                 return try await requestAuthorization()
             } catch {
-                logger.error("Notification authorization failed: \(error.localizedDescription)")
+                logger.failure("Notification authorization failed: \(error.localizedDescription)")
                 return false
             }
         case .denied:

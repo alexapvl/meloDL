@@ -14,6 +14,29 @@ extension String {
     }
 }
 
+enum SettingsPathLink {
+    static let scheme = "melodl-settings"
+
+    /// Turns "Settings > Page" mentions into links that open that Settings page.
+    static func linkify(_ text: String) -> AttributedString {
+        var result = AttributedString(text)
+        for destination in SettingsDestination.allCases {
+            let phrase = "Settings > \(destination.title)"
+            var searchStart = result.startIndex
+            while let range = result[searchStart...].range(of: phrase) {
+                result[range].link = URL(string: "\(scheme)://\(destination.rawValue)")
+                searchStart = range.upperBound
+            }
+        }
+        return result
+    }
+
+    static func destination(for url: URL) -> SettingsDestination? {
+        guard url.scheme == scheme, let host = url.host else { return nil }
+        return SettingsDestination(rawValue: host)
+    }
+}
+
 extension URL {
     var displayName: String {
         if self.path.hasSuffix("/Downloads") {

@@ -50,7 +50,7 @@ actor GitHubUpdateService {
                 logger.info("yt-dlp is up to date (\(remoteVersion))")
             }
         } catch {
-            logger.error("Failed to check yt-dlp updates: \(error.localizedDescription)")
+            logger.failure("Failed to check yt-dlp updates: \(error.localizedDescription)")
         }
     }
 
@@ -82,7 +82,7 @@ actor GitHubUpdateService {
                 logger.info("ffmpeg is up to date (\(remoteVersion))")
             }
         } catch {
-            logger.error("Failed to check ffmpeg updates: \(error.localizedDescription)")
+            logger.failure("Failed to check ffmpeg updates: \(error.localizedDescription)")
         }
     }
 

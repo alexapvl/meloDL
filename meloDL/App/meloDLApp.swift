@@ -26,6 +26,7 @@ struct meloDLApp: App {
     @StateObject private var sessionCoordinator: DownloadSessionCoordinator
     @State private var didTriggerLaunchReindex = false
     @State private var isShowingSettings = false
+    @State private var settingsDestination: SettingsDestination = .downloads
     @Environment(\.openWindow) private var openWindow
     @NSApplicationDelegateAdaptor(AppLifecycleDelegate.self) private var appLifecycleDelegate
     private let notificationDelegate = DownloadNotificationCenterDelegate()
@@ -100,6 +101,7 @@ struct meloDLApp: App {
             SettingsView(
                 updater: updaterController.updater,
                 appSettings: appSettings,
+                initialDestination: settingsDestination,
                 onDismiss: closeSettingsPage,
                 onReplayOnboarding: replayOnboarding
             )
@@ -108,6 +110,7 @@ struct meloDLApp: App {
             SettingsView(
                 updater: updaterController.updater,
                 appSettings: appSettings,
+                initialDestination: settingsDestination,
                 onDismiss: closeSettingsPage
             )
             .disableFocusRings()
@@ -128,7 +131,7 @@ struct meloDLApp: App {
                     ContentView(
                         appSettings: appSettings,
                         coordinator: sessionCoordinator,
-                        onOpenSettings: showSettingsPage
+                        onOpenSettings: showSettingsPage(_:)
                     )
                 } else {
                     OnboardingView(
@@ -174,6 +177,11 @@ struct meloDLApp: App {
     #endif
 
     private func showSettingsPage() {
+        showSettingsPage(.downloads)
+    }
+
+    private func showSettingsPage(_ destination: SettingsDestination) {
+        settingsDestination = destination
         isShowingSettings = true
 
         if mainAppWindow() == nil {
@@ -257,7 +265,7 @@ struct meloDLApp: App {
             appSettings: appSettings,
             sessionCoordinator: sessionCoordinator,
             onCheckAllUpdates: checkForAllUpdates,
-            onOpenSettings: showSettingsPage,
+            onOpenSettings: showSettingsPage(_:),
             onSwitchToDockMode: switchToDockMode,
             onQuit: quitApp
         )
