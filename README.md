@@ -13,6 +13,10 @@
 ## What it does
 
 - Accepts media URLs and downloads audio tracks, including playlists.
+- Accepts Spotify links for a track, album, playlist, or Liked Songs. Each song is matched on YouTube Music, then downloaded like any other track, with the filename and tags taken from Spotify.
+- Public Spotify playlists work without an account, up to the first 100 songs. Connecting Spotify in Settings downloads your own playlists, playlists you collaborate on, and Liked Songs in full.
+- Pauses for review when a YouTube Music match is uncertain or the song is already in your library. The review can be hidden so the track list stays visible, then continued later.
+- Copy a session URL from the sidebar menu or the session page.
 - Supports many websites via `yt-dlp`, including YouTube (Music), SoundCloud, TikTok, Instagram, and X (Twitter) and many more.
 - Full supported website list: https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md
 - Converts to MP3, M4A, FLAC, WAV, or OGG, with a quality setting.
@@ -28,6 +32,7 @@
 - Uses staged duplicate-review sessions so changes can be reviewed, adjusted, and confirmed before final cleanup. Cards can be swiped or dragged aside.
 - Includes a short post-action undo window for smart cleanup actions.
 - Can run from the menu bar only, launch at login, post session notifications, and open the download folder when a batch finishes.
+- Records errors in a local log. Settings > Support opens it in Finder so it can be attached to a bug report.
 - Supports automatic update checks for bundled download binaries (`yt-dlp`, `ffmpeg`, `ffprobe`).
 
 ## Architecture overview
