@@ -120,8 +120,19 @@ struct DownloadSession: Identifiable, Sendable {
         return (min(max(current, 0), downloadableItems.count), downloadableItems.count)
     }
 
-    var duplicateReviewTotal: Int {
-        items.filter(\.hadDuplicateMatch).count
+    /// Duplicate and match reviews count as one queue.
+    var reviewTotal: Int {
+        items.filter { $0.hadDuplicateMatch || $0.hadMatchReview }.count
+    }
+
+    var reviewRemaining: Int {
+        items.filter { $0.status == .waitingForUser }.count
+    }
+
+    var reviewPosition: Int {
+        let total = reviewTotal
+        guard total > 0 else { return 1 }
+        return min(max(total - reviewRemaining + 1, 1), total)
     }
 
     var duplicateReviewRemaining: Int {
@@ -142,13 +153,6 @@ struct DownloadSession: Identifiable, Sendable {
 
     var hasPendingReview: Bool {
         hasPendingDuplicateReview || hasPendingMatchReview
-    }
-
-    var duplicateReviewPosition: Int {
-        let total = duplicateReviewTotal
-        guard total > 0 else { return 1 }
-        let remaining = duplicateReviewRemaining
-        return min(max(total - remaining + 1, 1), total)
     }
 
     static func fallbackTitle(for rawURL: String) -> String {
@@ -253,6 +257,10 @@ struct DownloadSessionItem: Identifiable, Sendable {
     /// Duplicate review goes first; match review shows once the item has no duplicate pending.
     var needsMatchReview: Bool {
         status == .waitingForUser && duplicateMatch == nil && spotify?.needsReview == true
+    }
+
+    var hadMatchReview: Bool {
+        (spotify?.matchScore).map { $0 < YouTubeMusicMatcher.autoAcceptScore } ?? false
     }
 }
 

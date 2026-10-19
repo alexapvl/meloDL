@@ -94,8 +94,15 @@ struct meloDLApp: App {
         }
     }
 
-    @ViewBuilder
     private var mainWindowContent: some View {
+        ZStack {
+            mainWindowPages
+        }
+        .animation(.smooth(duration: 0.2), value: isShowingSettings)
+    }
+
+    @ViewBuilder
+    private var mainWindowPages: some View {
         if appSettings.onboardingCompleted && isShowingSettings {
             #if DEBUG
             SettingsView(
@@ -106,6 +113,7 @@ struct meloDLApp: App {
                 onReplayOnboarding: replayOnboarding
             )
             .disableFocusRings()
+            .transition(.opacity)
             #else
             SettingsView(
                 updater: updaterController.updater,
@@ -114,6 +122,7 @@ struct meloDLApp: App {
                 onDismiss: closeSettingsPage
             )
             .disableFocusRings()
+            .transition(.opacity)
             #endif
         } else if launchMenubarOnlyMode && appSettings.onboardingCompleted {
             Color.clear
@@ -151,6 +160,7 @@ struct meloDLApp: App {
                 }
             }
             .disableFocusRings()
+            .transition(.opacity)
         }
     }
 

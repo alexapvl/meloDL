@@ -138,6 +138,7 @@ private struct IndexedFolderRow: View {
                 rowLabel
             }
             .buttonStyle(.plain)
+            .pointerStyle(.link)
             .focusable(false)
             .disabled(isDisabled)
 
@@ -209,6 +210,7 @@ private struct IndexedFolderControlButton: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .pointerStyle(.link)
         .focusable(false)
         .disabled(isDisabled)
         .opacity(isDisabled ? 0.55 : 1)

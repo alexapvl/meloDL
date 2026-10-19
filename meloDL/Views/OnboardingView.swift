@@ -297,6 +297,7 @@ struct OnboardingView: View {
                 }
             }
             .buttonStyle(.borderedProminent)
+            .pointerStyle(.link)
             .focusable(false)
             .disabled(isAdvancing || isSliding || validationMessage != nil)
         }

@@ -43,6 +43,8 @@ struct SettingsView: View {
 
             selectedPage
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .entrance(x: 28)
+                .clipped()
         }
         .background(SettingsTheme.contentBackground)
         .overlay {
@@ -110,13 +112,14 @@ struct SettingsView: View {
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 3) {
             VStack(alignment: .leading, spacing: 3) {
-                ForEach(SettingsDestination.allCases, id: \.self) { destination in
+                ForEach(Array(SettingsDestination.allCases.enumerated()), id: \.element) { index, destination in
                     SettingsSidebarRow(
                         destination: destination,
                         isSelected: selection == destination
                     ) {
                         selectDestination(destination)
                     }
+                    .sidebarEntrance(index: index)
                 }
             }
             .padding(.horizontal, 6)
@@ -143,6 +146,7 @@ struct SettingsView: View {
                 )
             }
             .buttonStyle(.plain)
+            .pointerStyle(.link)
             .onHover { isBackButtonHovered = $0 }
         }
     }
@@ -208,6 +212,7 @@ private struct SettingsSidebarRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .pointerStyle(.link)
         .background(rowBackground)
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .onHover { isHovered = $0 }
@@ -280,10 +285,10 @@ enum SettingsDestination: String, CaseIterable {
 
 private enum SettingsLayout {
     static let pageHorizontalPadding: CGFloat = 44
-    static let pageTopPadding: CGFloat = 46
+    static let pageTopPadding: CGFloat = 15
     static let pageBottomPadding: CGFloat = 28
     static let sidebarWidth: CGFloat = 230
-    static let sidebarContentTopInset: CGFloat = 64
+    static let sidebarContentTopInset: CGFloat = 44
     static let sidebarBottomPadding: CGFloat = 12
 
     static let pageSpacing: CGFloat = 34
@@ -552,6 +557,7 @@ private struct SecondaryHoverLink: View {
                 .underline(isHovered, color: .secondary)
         }
         .buttonStyle(.plain)
+        .pointerStyle(.link)
         .contentShape(.rect)
         .onHover { isHovered = $0 }
     }
@@ -574,6 +580,7 @@ private struct SecondaryHoverButton<Label: View>: View {
                 .foregroundStyle(.secondary)
         }
         .buttonStyle(.plain)
+        .pointerStyle(.link)
         .contentShape(.rect)
         .onHover { isHovered = $0 }
     }
@@ -685,12 +692,12 @@ struct SpotifySettingsView: View {
     var body: some View {
         SettingsPage(title: "Spotify", subtitle: "Download songs from Spotify links. meloDL finds each song on YouTube Music.") {
             SettingsSection(title: "Without Connecting") {
-                SettingsTextBlock(text: "Paste a Spotify link to download tracks, albums and public playlists. Spotify only shares the first \(SpotifyService.embedTrackLimit) songs of a playlist this way. Connect to also download your own playlists in full, including private ones, and your Liked Songs.")
+                SettingsTextBlock(text: "Paste a Spotify link to download tracks, albums and public playlists. Spotify only shares the first \(SpotifyService.embedTrackLimit) songs of a playlist this way. Connect to also download your Liked Songs and, in full, your own playlists and ones you collaborate on, including private ones.")
             }
 
             if let connectedName {
                 SettingsSection(title: "Account") {
-                    SettingsRow(title: "Connected as \(connectedName)", description: "Your own playlists and Liked Songs download in full, with album, year and track number tags.") {
+                    SettingsRow(title: "Connected as \(connectedName)", description: "Your own playlists, playlists you collaborate on, and your Liked Songs download in full, with album, year and track number tags.") {
                         Button("Disconnect", role: .destructive) {
                             Task {
                                 await SpotifyService.shared.disconnect()
@@ -1267,6 +1274,7 @@ private struct DuplicatesSettingsView: View {
                     .foregroundStyle(isSelectedKeeper ? Color.accentColor : .secondary)
             }
             .buttonStyle(.plain)
+            .pointerStyle(.link)
             .help("Set as keeper")
 
             VStack(alignment: .leading, spacing: 4) {

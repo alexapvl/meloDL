@@ -3,6 +3,18 @@ import Foundation
 import SwiftUI
 import os
 
+enum SessionReview: Identifiable {
+    case duplicate(DuplicateReviewItem)
+    case match(DownloadSessionItem, SpotifyItemInfo)
+
+    var id: UUID {
+        switch self {
+        case .duplicate(let item): return item.id
+        case .match(let item, _): return item.id
+        }
+    }
+}
+
 @MainActor
 final class DownloadSessionCoordinator: ObservableObject {
     @Published var draftURL = ""
@@ -17,6 +29,7 @@ final class DownloadSessionCoordinator: ObservableObject {
     }
     @Published private(set) var trimTarget: TrimTarget?
     @Published private(set) var isIndexingTracks = false
+    @Published private(set) var isSpotifyConnected = false
     @Published var temporaryDownloadFolderPath: String?
 
     private let appSettings: AppSettings
@@ -57,6 +70,9 @@ final class DownloadSessionCoordinator: ObservableObject {
 
     func onAppear() {
         startIndexerStatusPollingIfNeeded()
+        Task {
+            isSpotifyConnected = await SpotifyService.shared.connectedAccountName != nil
+        }
         guard !didBootstrap else { return }
         didBootstrap = true
         Task {
@@ -179,6 +195,31 @@ final class DownloadSessionCoordinator: ObservableObject {
         }
     }
 
+    /// Duplicate and YouTube Music match reviews share one queue, in track order.
+    func currentReview(for sessionID: UUID) -> SessionReview? {
+        guard let session = sessions.first(where: { $0.id == sessionID }),
+              let item = session.items
+                .sorted(by: { $0.itemIndex < $1.itemIndex })
+                .first(where: { $0.status == .waitingForUser }) else { return nil }
+        if item.duplicateMatch != nil, let duplicate = currentDuplicateReviewItem(for: sessionID) {
+            return .duplicate(duplicate)
+        }
+        if let info = item.spotify, item.needsMatchReview {
+            return .match(item, info)
+        }
+        return nil
+    }
+
+    func skipAllPendingReviews(for sessionID: UUID) {
+        mutateSession(sessionID) { session in
+            for index in session.items.indices where session.items[index].status == .waitingForUser {
+                session.items[index].status = .skipped
+            }
+            finalizeReviewState(in: &session)
+        }
+        scheduleWaitingSessionsIfReady(sessionID)
+    }
+
     func currentDuplicateReviewItem(for sessionID: UUID) -> DuplicateReviewItem? {
         guard let session = sessions.first(where: { $0.id == sessionID }),
               let item = session.items.first(where: { $0.status == .waitingForUser && $0.duplicateMatch != nil }),
@@ -186,6 +227,7 @@ final class DownloadSessionCoordinator: ObservableObject {
             return nil
         }
         return DuplicateReviewItem(
+            id: item.id,
             source: session.kind == .playlist ? .playlist(url: item.sourceURL) : .single(url: item.sourceURL),
             incomingTitle: item.title,
             incomingURL: item.sourceURL,
@@ -208,17 +250,6 @@ final class DownloadSessionCoordinator: ObservableObject {
 
     func downloadCurrentDuplicateAnyway(for sessionID: UUID) {
         resolveCurrentDuplicate(for: sessionID, shouldDownload: true)
-    }
-
-    func skipRemainingDuplicates(for sessionID: UUID) {
-        mutateSession(sessionID) { session in
-            for index in session.items.indices where session.items[index].status == .waitingForUser && session.items[index].duplicateMatch != nil {
-                session.items[index].status = .skipped
-            }
-            finalizeReviewState(in: &session)
-        }
-
-        scheduleWaitingSessionsIfReady(sessionID)
     }
 
     func cancelActiveSessionsForQuitAndPersist() async {
@@ -433,7 +464,7 @@ final class DownloadSessionCoordinator: ObservableObject {
             session.notice = collection.isTruncated
                 ? (isConnected
                     ? "Spotify only shares the first \(SpotifyService.embedTrackLimit) songs of playlists you don't own or collaborate on."
-                    : "Spotify only shares the first \(SpotifyService.embedTrackLimit) songs of playlists without logging in.\nConnect Spotify in Settings > Spotify to download your own playlists in full.")
+                    : "Spotify only shares the first \(SpotifyService.embedTrackLimit) songs of playlists without logging in.\nConnect Spotify in Settings > Spotify to download your own and collaborative playlists in full.")
                 : nil
         }
 
@@ -563,16 +594,6 @@ final class DownloadSessionCoordinator: ObservableObject {
 
     func skipCurrentMatch(for sessionID: UUID) {
         resolveCurrentMatch(for: sessionID, accept: false)
-    }
-
-    func skipRemainingMatches(for sessionID: UUID) {
-        mutateSession(sessionID) { session in
-            for index in session.items.indices where session.items[index].needsMatchReview {
-                session.items[index].status = .skipped
-            }
-            finalizeReviewState(in: &session)
-        }
-        scheduleWaitingSessionsIfReady(sessionID)
     }
 
     private func resolveCurrentMatch(for sessionID: UUID, accept: Bool) {
@@ -933,7 +954,9 @@ final class DownloadSessionCoordinator: ObservableObject {
         indexerStatusTask = Task { [weak self] in
             while let self, !Task.isCancelled {
                 let status = await TrackIndexer.shared.status()
-                self.isIndexingTracks = status.isIndexing
+                if self.isIndexingTracks != status.isIndexing {
+                    self.isIndexingTracks = status.isIndexing
+                }
                 try? await Task.sleep(nanoseconds: 400_000_000)
             }
         }

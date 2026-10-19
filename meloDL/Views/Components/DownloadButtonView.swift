@@ -29,6 +29,7 @@ struct DownloadButtonView: View {
         }
         .disabled(isCheckingDuplicates || isAnalyzingPlaylist || (!isDownloading && (!canDownload || isIndexingTracks)))
         .buttonStyle(.borderedProminent)
+        .pointerStyle(.link)
         .controlSize(.regular)
         .tint(isDownloading ? .red : .accentColor)
     }
@@ -114,6 +115,7 @@ extension View {
     func meloBorderedButton(destructive: Bool = false, armed: Bool = false) -> some View {
         buttonStyle(MeloBorderedButtonStyle(destructive: destructive, armed: armed))
             .focusable(false)
+            .pointerStyle(.link)
     }
 }
 

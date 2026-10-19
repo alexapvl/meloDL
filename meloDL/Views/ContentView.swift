@@ -33,6 +33,8 @@ struct ContentView: View {
                 session: coordinator.selectedSession
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .entrance(x: -28)
+            .clipped()
         }
         .background(SessionTheme.contentBackground)
         .frame(minWidth: SessionLayout.windowMinWidth, minHeight: SessionLayout.windowMinHeight)
@@ -61,22 +63,23 @@ private struct SessionSidebar: View {
     @State private var isShowingDeleteConfirmation = false
 
     var body: some View {
+        let visibleGroups = historyGroups.filter { !$0.sessions.isEmpty }
         VStack(alignment: .leading, spacing: 12) {
             submitArea
+                .sidebarEntrance(index: 0)
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 10) {
-                    ForEach(historyGroups) { group in
-                        if !group.sessions.isEmpty {
-                            SessionHistoryGroupView(
-                                group: group,
-                                selectedSessionID: coordinator.selectedSession?.id,
-                                onSelect: coordinator.selectSession,
-                                onRequestDelete: requestDeleteConfirmation,
-                                makeTrimTarget: coordinator.makeTrimTarget(for:),
-                                onTrim: coordinator.openTrimEditor
-                            )
-                        }
+                    ForEach(Array(visibleGroups.enumerated()), id: \.element.id) { index, group in
+                        SessionHistoryGroupView(
+                            group: group,
+                            selectedSessionID: coordinator.selectedSession?.id,
+                            onSelect: coordinator.selectSession,
+                            onRequestDelete: requestDeleteConfirmation,
+                            makeTrimTarget: coordinator.makeTrimTarget(for:),
+                            onTrim: coordinator.openTrimEditor
+                        )
+                        .sidebarEntrance(index: index + 1)
                     }
                 }
                 .padding(.horizontal, 6)
@@ -171,6 +174,7 @@ private struct SessionSidebar: View {
         }
         .menuStyle(.button)
         .buttonStyle(.plain)
+        .pointerStyle(.link)
         .focusable(false)
         .onHover { isDestinationHovered = $0 }
         .help(destinationHelpText)
@@ -204,6 +208,7 @@ private struct SessionSidebar: View {
         }
         .menuStyle(.button)
         .buttonStyle(.plain)
+        .pointerStyle(.link)
         .focusable(false)
         .onHover { isFormatHovered = $0 }
         .help("Format for the next session")
@@ -335,10 +340,19 @@ private struct SessionSidebar: View {
             .padding(.trailing, 30)
             .background(Color(nsColor: .textBackgroundColor).opacity(0.42), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             .overlay(alignment: .trailing) {
-                Image(systemName: "return")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(Color.secondary.opacity(coordinator.draftURL.isEmptyOrWhitespace ? 0.34 : 0.62))
-                    .padding(.trailing, 9)
+                Button(action: submitDraftURL) {
+                    Image(systemName: "return")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Color.secondary.opacity(coordinator.draftURL.isEmptyOrWhitespace ? 0.34 : 0.62))
+                        .frame(width: 26, height: 26)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .pointerStyle(.link)
+                .disabled(coordinator.draftURL.isEmptyOrWhitespace)
+                .help("Start download")
+                .accessibilityLabel("Start download")
+                .padding(.trailing, 2)
             }
             .overlay {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -359,6 +373,7 @@ private struct SessionSidebar: View {
                     )
                 }
                 .buttonStyle(.plain)
+                .pointerStyle(.link)
                 .onHover { isSettingsHovered = $0 }
             } else {
                 SettingsLink {
@@ -369,6 +384,7 @@ private struct SessionSidebar: View {
                     )
                 }
                 .buttonStyle(.plain)
+                .pointerStyle(.link)
                 .onHover { isSettingsHovered = $0 }
             }
         }
@@ -437,6 +453,7 @@ private struct SessionHistoryGroupView: View {
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
+            .pointerStyle(.link)
 
             if isExpanded {
                 ForEach(group.sessions) { session in
@@ -499,6 +516,7 @@ private struct SessionSidebarRow: View {
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
+        .pointerStyle(.link)
         .background(rowFill, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .contextMenu {
             if let path = session.firstExistingCompletedFilePath {
@@ -515,6 +533,12 @@ private struct SessionSidebarRow: View {
                 } label: {
                     Label("Trim…", systemImage: "scissors")
                 }
+            }
+
+            Button {
+                copyToPasteboard(session.sourceURL)
+            } label: {
+                Label("Copy Session URL", systemImage: "link")
             }
 
             Button(role: .destructive) {
@@ -578,14 +602,15 @@ private struct SessionDetailPane: View {
     @Environment(\.compactWindowChrome) private var compactWindowChrome
     @State private var isRemoveConfirming = false
     @State private var isConfirmingSkipRemaining = false
-    @State private var isConfirmingSkipRemainingMatches = false
+    @State private var didCopyURL = false
+    @State private var hiddenReviewSessionIDs: Set<UUID> = []
 
     var body: some View {
         if let session {
-            let reviewItem = coordinator.currentDuplicateReviewItem(for: session.id)
-            let matchReviewItem = reviewItem == nil ? coordinator.currentMatchReviewItem(for: session.id) : nil
+            let pendingReview = coordinator.currentReview(for: session.id)
+            let review = hiddenReviewSessionIDs.contains(session.id) ? nil : pendingReview
             let trimTarget = coordinator.trimTarget.flatMap { $0.sessionID == session.id ? $0 : nil }
-            let isOverlayPresented = reviewItem != nil || matchReviewItem != nil || trimTarget != nil
+            let isOverlayPresented = review != nil || trimTarget != nil
             ZStack {
                 VStack(spacing: 0) {
                     header(for: session)
@@ -600,7 +625,7 @@ private struct SessionDetailPane: View {
                         .overlay(SessionTheme.rowDivider)
 
                     ScrollView {
-                        itemList(for: session)
+                        itemList(for: session, showsReviewBanner: pendingReview != nil && review == nil)
                             .frame(maxWidth: SessionLayout.detailContentMaxWidth, alignment: .leading)
                             .frame(maxWidth: .infinity, alignment: .top)
                             .padding(.horizontal, 46)
@@ -614,17 +639,13 @@ private struct SessionDetailPane: View {
                 if let trimTarget {
                     trimEditorOverlay(target: trimTarget)
                         .transition(.opacity.combined(with: .scale(scale: 0.98)))
-                } else if let reviewItem {
-                    duplicateReviewOverlay(item: reviewItem, session: session)
-                        .transition(.opacity.combined(with: .scale(scale: 0.98)))
-                } else if let matchReviewItem, let info = matchReviewItem.spotify {
-                    matchReviewOverlay(item: matchReviewItem, info: info, session: session)
+                } else if let review {
+                    reviewOverlay(review, session: session)
                         .transition(.opacity.combined(with: .scale(scale: 0.98)))
                 }
             }
             .background(SessionTheme.contentBackground)
-            .animation(.easeInOut(duration: 0.18), value: reviewItem?.id)
-            .animation(.easeInOut(duration: 0.18), value: matchReviewItem?.id)
+            .animation(.easeInOut(duration: 0.18), value: review?.id)
             .animation(.easeInOut(duration: 0.18), value: trimTarget?.id)
             .onChange(of: session.id) {
                 isRemoveConfirming = false
@@ -649,14 +670,35 @@ private struct SessionDetailPane: View {
                         .font(.system(size: 30, weight: .bold))
                         .lineLimit(2)
 
-                    Text(session.sourceURL)
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .textSelection(.enabled)
+                    HStack(spacing: 6) {
+                        Text(session.sourceURL)
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .textSelection(.enabled)
 
-                    if let notice = session.notice {
+                        Button {
+                            copyToPasteboard(session.sourceURL)
+                            didCopyURL = true
+                            Task {
+                                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                                didCopyURL = false
+                            }
+                        } label: {
+                            Image(systemName: didCopyURL ? "checkmark" : "doc.on.doc")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                                .frame(width: 16, height: 16)
+                                .contentShape(.rect)
+                        }
+                        .buttonStyle(.plain)
+                        .pointerStyle(.link)
+                        .help("Copy session URL")
+                        .accessibilityLabel("Copy session URL")
+                    }
+
+                    if let notice = session.notice, !(coordinator.isSpotifyConnected && notice.contains("Settings > Spotify")) {
                         Label { Text(SettingsPathLink.linkify(notice)) } icon: { Image(systemName: "info.circle") }
                             .font(.callout)
                             .foregroundStyle(.secondary)
@@ -720,13 +762,12 @@ private struct SessionDetailPane: View {
         }
     }
 
-    @ViewBuilder
-    private func duplicateReviewOverlay(item: DuplicateReviewItem, session: DownloadSession) -> some View {
-        let total = session.duplicateReviewTotal
-        let position = session.duplicateReviewPosition
-        let remaining = session.duplicateReviewRemaining
+    private func reviewOverlay(_ review: SessionReview, session: DownloadSession) -> some View {
+        let total = session.reviewTotal
+        let position = session.reviewPosition
+        let remaining = session.reviewRemaining
 
-        ZStack {
+        return ZStack {
             Rectangle()
                 .fill(.black.opacity(0.18))
                 .ignoresSafeArea()
@@ -734,11 +775,20 @@ private struct SessionDetailPane: View {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Duplicate Review")
-                            .font(.title3.weight(.semibold))
-                        Text("Resolve this match to continue the session. Other sessions can keep running.")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
+                        switch review {
+                        case .duplicate:
+                            Text("Duplicate Review")
+                                .font(.title3.weight(.semibold))
+                            Text("Resolve this match to continue the session. Other sessions can keep running.")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                        case .match:
+                            Text("Check YouTube Music Match")
+                                .font(.title3.weight(.semibold))
+                            Text("meloDL isn't sure this is the same song. Check it before downloading.")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                        }
                     }
 
                     Spacer(minLength: 16)
@@ -749,23 +799,42 @@ private struct SessionDetailPane: View {
                             .foregroundStyle(.secondary)
                             .monospacedDigit()
 
-                        Button(position == 1 ? "Skip all" : "Skip remaining") {
-                            isConfirmingSkipRemaining = true
+                        HStack(spacing: 8) {
+                            Button("Hide") {
+                                hiddenReviewSessionIDs.insert(session.id)
+                            }
+                            .meloBorderedButton()
+                            .keyboardShortcut(.cancelAction)
+
+                            Button(position == 1 ? "Skip all" : "Skip remaining") {
+                                isConfirmingSkipRemaining = true
+                            }
+                            .meloBorderedButton()
                         }
-                        .meloBorderedButton()
                     }
                 }
 
-                if appSettings.showDuplicateReviewGestureTip {
-                    swipeTipBanner
+                switch review {
+                case .duplicate(let item):
+                    if appSettings.showDuplicateReviewGestureTip {
+                        swipeTipBanner
+                    }
+                    DuplicateReviewCard(
+                        item: item,
+                        onSkip: { coordinator.skipCurrentDuplicate(for: session.id) },
+                        onDownloadAnyway: { coordinator.downloadCurrentDuplicateAnyway(for: session.id) },
+                        onPreview: { coordinator.previewCurrentDuplicateMatch(for: session.id) }
+                    )
+                    .id(item.id)
+                case .match(let item, let info):
+                    SpotifyMatchReviewCard(
+                        info: info,
+                        matchURL: item.sourceURL,
+                        onSkip: { coordinator.skipCurrentMatch(for: session.id) },
+                        onDownload: { coordinator.acceptCurrentMatch(for: session.id) }
+                    )
+                    .id(item.id)
                 }
-
-                DuplicateReviewCard(
-                    item: item,
-                    onSkip: { coordinator.skipCurrentDuplicate(for: session.id) },
-                    onDownloadAnyway: { coordinator.downloadCurrentDuplicateAnyway(for: session.id) },
-                    onPreview: { coordinator.previewCurrentDuplicateMatch(for: session.id) }
-                )
             }
             .padding(24)
             .frame(maxWidth: 720)
@@ -778,91 +847,52 @@ private struct SessionDetailPane: View {
             .padding(34)
         }
         .confirmationDialog(
-            "Skip remaining duplicates?",
+            "Skip remaining tracks?",
             isPresented: $isConfirmingSkipRemaining,
             titleVisibility: .visible
         ) {
             Button("Skip All", role: .destructive) {
-                coordinator.skipRemainingDuplicates(for: session.id)
+                coordinator.skipAllPendingReviews(for: session.id)
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("The remaining \(remaining) duplicate tracks will be skipped and won't be downloaded.")
+            Text("The remaining \(remaining) tracks waiting for review will be skipped and won't be downloaded.")
         }
     }
 
-    private func matchReviewOverlay(item: DownloadSessionItem, info: SpotifyItemInfo, session: DownloadSession) -> some View {
-        let remaining = session.matchReviewRemaining
-
-        return ZStack {
-            Rectangle()
-                .fill(.black.opacity(0.18))
-                .ignoresSafeArea()
-
-            VStack(alignment: .leading, spacing: 14) {
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Check YouTube Music Match")
-                            .font(.title3.weight(.semibold))
-                        Text("meloDL isn't sure this is the same song. Check it before downloading.")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    Spacer(minLength: 16)
-
-                    VStack(alignment: .trailing, spacing: 8) {
-                        Text("\(remaining) left")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                            .monospacedDigit()
-
-                        Button("Skip remaining") {
-                            isConfirmingSkipRemainingMatches = true
-                        }
-                        .meloBorderedButton()
-                    }
-                }
-
-                SpotifyMatchReviewCard(
-                    info: info,
-                    matchURL: item.sourceURL,
-                    onSkip: { coordinator.skipCurrentMatch(for: session.id) },
-                    onDownload: { coordinator.acceptCurrentMatch(for: session.id) }
-                )
-                .id(item.id)
+    private func reviewBanner(for session: DownloadSession) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: "exclamationmark.circle")
+                .foregroundStyle(.orange)
+            Text("\(session.reviewRemaining) \(session.reviewRemaining == 1 ? "track needs" : "tracks need") review before this session can continue.")
+                .font(.callout)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 12)
+            Button("Continue Review") {
+                hiddenReviewSessionIDs.remove(session.id)
             }
-            .padding(24)
-            .frame(maxWidth: 720)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(SessionTheme.cardStroke, lineWidth: 1)
-            }
-            .shadow(radius: 22, y: 12)
-            .padding(34)
+            .meloBorderedButton()
         }
-        .confirmationDialog(
-            "Skip remaining uncertain matches?",
-            isPresented: $isConfirmingSkipRemainingMatches,
-            titleVisibility: .visible
-        ) {
-            Button("Skip All", role: .destructive) {
-                coordinator.skipRemainingMatches(for: session.id)
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("The remaining \(remaining) tracks with uncertain matches will be skipped and won't be downloaded.")
+        .padding(12)
+        .background(SessionTheme.cardBackground, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(SessionTheme.cardStroke, lineWidth: 1)
         }
     }
 
-    private func itemList(for session: DownloadSession) -> some View {
+    private func itemList(for session: DownloadSession, showsReviewBanner: Bool) -> some View {
         VStack(alignment: .leading, spacing: 12) {
+            if showsReviewBanner {
+                reviewBanner(for: session)
+            }
+
             Text(session.kind == .playlist ? "Tracks" : "Download")
                 .font(.title3.weight(.semibold))
 
-            VStack(spacing: 0) {
+            LazyVStack(spacing: 0) {
                 let sortedItems = session.items.sorted { $0.itemIndex < $1.itemIndex }
+                let lastItemID = sortedItems.last?.id
                 if sortedItems.isEmpty {
                     let isAnimated = shouldAnimateEmptyItemListStatus(for: session)
                     ShimmeringStatusText(
@@ -880,7 +910,7 @@ private struct SessionDetailPane: View {
                             trimTarget: coordinator.makeTrimTarget(forFileAt: item.outputFilePath, title: item.title, in: session.id),
                             onTrim: coordinator.openTrimEditor
                         )
-                        if item.id != sortedItems.last?.id {
+                        if item.id != lastItemID {
                             Divider()
                                 .overlay(SessionTheme.rowDivider)
                         }
@@ -1102,6 +1132,11 @@ private struct ConfirmingDeleteButton: View {
         }
         .meloBorderedButton(destructive: true, armed: isConfirming)
     }
+}
+
+private func copyToPasteboard(_ string: String) {
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString(string, forType: .string)
 }
 
 private struct ShimmeringStatusText: View {
@@ -1422,10 +1457,10 @@ private struct SessionHistoryGroup: Identifiable {
 
 enum SessionLayout {
     static let sidebarWidth: CGFloat = 230
-    static let sidebarTopInset: CGFloat = 64
+    static let sidebarTopInset: CGFloat = 44
     static let compactSidebarTopInset: CGFloat = 12
     static let sidebarBottomPadding: CGFloat = 12
-    static let detailHeaderTopPadding: CGFloat = 52
+    static let detailHeaderTopPadding: CGFloat = 12
     static let compactDetailHeaderTopPadding: CGFloat = 16
     static let detailContentMaxWidth: CGFloat = 760
     static let windowMinWidth: CGFloat = 580

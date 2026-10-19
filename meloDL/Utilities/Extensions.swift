@@ -20,6 +20,7 @@ enum SettingsPathLink {
     /// Turns "Settings > Page" mentions into links that open that Settings page.
     static func linkify(_ text: String) -> AttributedString {
         var result = AttributedString(text)
+        guard text.contains("Settings > ") else { return result }
         for destination in SettingsDestination.allCases {
             let phrase = "Settings > \(destination.title)"
             var searchStart = result.startIndex
