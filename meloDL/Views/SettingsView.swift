@@ -1565,7 +1565,7 @@ struct CreditsSettingsView: View {
                 }
 
                 SettingsSection(title: "License") {
-                    SettingsTextBlock(text: "meloDL is released under the MIT License.")
+                    SettingsTextBlock(text: "meloDL is released under the GNU General Public License v3.0.")
                 }
             }
         }

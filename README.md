@@ -75,4 +75,4 @@ See [PRIVACY.md](./PRIVACY.md) for the basic privacy and data-handling disclaime
 
 ## License
 
-MIT. See [LICENSE](./LICENSE).
+GPL-3.0. Copyright (c) 2026 Alexandru Apavaloaiei. See [LICENSE](./LICENSE).
