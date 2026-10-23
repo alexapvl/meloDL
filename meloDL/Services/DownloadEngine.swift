@@ -5,6 +5,8 @@ struct PlaylistEntry: Sendable {
     let url: String
     let title: String
     var metadata: SpotifyTrack? = nil
+    /// Length reported by yt-dlp before downloading, when the site provides one.
+    var durationSec: Double? = nil
 }
 
 enum DownloadEvent: Sendable {
@@ -256,6 +258,9 @@ final class DownloadEngine {
             if let metadata = entry.metadata {
                 arguments += Self.metadataOverrideArguments(for: metadata)
             }
+            if let genre = config.genre {
+                arguments += Self.genreOverrideArguments(genre)
+            }
         }
 
         if audioSettings.embedThumbnail {
@@ -297,12 +302,23 @@ final class DownloadEngine {
         ]
         return fields.flatMap { field, value -> [String] in
             guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return [] }
-            let literal = value
-                .replacingOccurrences(of: "%", with: "%%")
-                .replacingOccurrences(of: ":", with: "\\:")
-                .replacingOccurrences(of: "\n", with: " ")
-            return ["--parse-metadata", "\(literal)%(meloDL|)s:%(\(field))s"]
+            return literalMetadataArguments(value, field: field)
         }
+    }
+
+    /// An empty genre clears the YouTube category yt-dlp would otherwise embed.
+    static func genreOverrideArguments(_ genre: String) -> [String] {
+        let trimmed = genre.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return ["--parse-metadata", ":(?P<meta_genre>)"] }
+        return literalMetadataArguments(trimmed, field: "meta_genre")
+    }
+
+    private static func literalMetadataArguments(_ value: String, field: String) -> [String] {
+        let literal = value
+            .replacingOccurrences(of: "%", with: "%%")
+            .replacingOccurrences(of: ":", with: "\\:")
+            .replacingOccurrences(of: "\n", with: " ")
+        return ["--parse-metadata", "\(literal)%(meloDL|)s:%(\(field))s"]
     }
 
     private func completedFilepath(from output: ProcessOutput) -> String? {
@@ -321,7 +337,7 @@ final class DownloadEngine {
 
         let output = try await runProcess(
             ytdlpPath,
-            arguments: [url, "--flat-playlist", "--print", "%(title)s\t%(webpage_url,url)s", "--no-warnings"]
+            arguments: [url, "--flat-playlist", "--print", "%(title)s\t%(webpage_url,url)s\t%(duration)s", "--no-warnings"]
         )
 
         guard output.exitCode == 0 else {
@@ -335,7 +351,11 @@ final class DownloadEngine {
                 guard !trimmed.isEmpty else { return nil }
                 let parts = trimmed.components(separatedBy: "\t")
                 if parts.count >= 2, parts[1].hasPrefix("http") {
-                    return PlaylistEntry(url: parts[1], title: parts[0].isEmpty ? parts[1] : parts[0])
+                    return PlaylistEntry(
+                        url: parts[1],
+                        title: parts[0].isEmpty ? parts[1] : parts[0],
+                        durationSec: parts.count >= 3 ? Double(parts[2]) : nil
+                    )
                 }
                 if trimmed.hasPrefix("http") {
                     return PlaylistEntry(url: trimmed, title: trimmed)
@@ -379,6 +399,30 @@ final class DownloadEngine {
         guard output.exitCode == 0 else {
             throw AudioTrimError.ffmpegFailed(extractErrorMessage(from: output.stderr))
         }
+    }
+
+    /// Rewrites the genre tag in place without re-encoding. An empty genre removes the tag.
+    func writeGenre(_ genre: String, to fileURL: URL) async throws {
+        let ffmpegPath = await binaryManager.ffmpegPath
+        let temporaryURL = fileURL.deletingLastPathComponent()
+            .appendingPathComponent(".\(UUID().uuidString).\(fileURL.pathExtension)")
+        defer { try? FileManager.default.removeItem(at: temporaryURL) }
+
+        let arguments = [
+            "-hide_banner", "-nostdin", "-y",
+            "-i", fileURL.path,
+            "-map", "0:a:0",
+            "-map", "0:v?",
+            "-c", "copy",
+            "-map_metadata", "0",
+            "-metadata", "genre=\(genre.trimmingCharacters(in: .whitespacesAndNewlines))",
+            temporaryURL.path
+        ]
+        let output = try await runProcess(ffmpegPath, arguments: arguments)
+        guard output.exitCode == 0 else {
+            throw DownloadEngineError.downloadFailed(extractErrorMessage(from: output.stderr))
+        }
+        _ = try FileManager.default.replaceItemAt(fileURL, withItemAt: temporaryURL)
     }
 
     private func ffmpegTime(_ seconds: TimeInterval) -> String {

@@ -39,6 +39,11 @@ enum AudioFormat: String, CaseIterable, Sendable {
     var supportsThumbnailEmbed: Bool {
         self == .mp3 || self == .m4a || self == .flac
     }
+
+    /// Rekordbox cannot import OGG Vorbis files.
+    var supportsRekordbox: Bool {
+        self != .ogg
+    }
 }
 
 enum AudioQuality: String, CaseIterable, Sendable {

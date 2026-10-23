@@ -25,7 +25,7 @@ actor DownloadSessionStore {
         let itemsBySession = try fetchItemsBySession()
         let sql = """
         SELECT id, source_url, kind, display_title, resolved_title, status, attention_reason,
-               created_at, completed_at, output_folder_path, format, error_message, attention_acknowledged, notice
+               created_at, completed_at, output_folder_path, format, error_message, attention_acknowledged, notice, genre
         FROM sessions
         ORDER BY created_at DESC;
         """
@@ -69,7 +69,8 @@ actor DownloadSessionStore {
                     items: itemsBySession[id] ?? [],
                     errorMessage: errorMessage,
                     attentionAcknowledged: attentionAcknowledged,
-                    notice: sqliteOptionalText(statement, column: 13)
+                    notice: sqliteOptionalText(statement, column: 13),
+                    genre: sqliteOptionalText(statement, column: 14)
                 )
             )
         }
@@ -108,6 +109,41 @@ actor DownloadSessionStore {
     func deleteSession(id: UUID) throws {
         try ensureReady()
         try execute(sql: "DELETE FROM sessions WHERE id = '\(id.uuidString)';")
+    }
+
+    /// Kept apart from sessions so deleting a session doesn't forget what was downloaded.
+    func recordDownloadedLink(key: String, url: String, filePath: String, title: String) throws {
+        try ensureReady()
+        let sql = """
+        INSERT OR REPLACE INTO downloaded_links (link_key, url, file_path, title, downloaded_at)
+        VALUES (?, ?, ?, ?, ?);
+        """
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_prepare_v2(try database, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw makeError(message: "Failed to prepare downloaded link insert")
+        }
+        bindText(statement, 1, key)
+        bindText(statement, 2, url)
+        bindText(statement, 3, filePath)
+        bindText(statement, 4, title)
+        sqlite3_bind_double(statement, 5, Date().timeIntervalSince1970)
+        guard sqlite3_step(statement) == SQLITE_DONE else {
+            throw makeError(message: "Failed to insert downloaded link")
+        }
+    }
+
+    func downloadedFilePath(forLinkKey key: String) throws -> String? {
+        try ensureReady()
+        let sql = "SELECT file_path FROM downloaded_links WHERE link_key = ?;"
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_prepare_v2(try database, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw makeError(message: "Failed to prepare downloaded link lookup")
+        }
+        bindText(statement, 1, key)
+        guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
+        return sqliteText(statement, column: 0)
     }
 
     private func ensureReady() throws {
@@ -194,14 +230,92 @@ actor DownloadSessionStore {
         )
         try addColumnIfNotExists(table: "sessions", column: "notice", definition: "TEXT")
         try addColumnIfNotExists(table: "session_items", column: "spotify_json", definition: "TEXT")
+        try addColumnIfNotExists(table: "sessions", column: "genre", definition: "TEXT")
+        try addColumnIfNotExists(table: "session_items", column: "genre", definition: "TEXT")
+        try execute(sql: """
+        CREATE TABLE IF NOT EXISTS downloaded_links (
+            link_key TEXT PRIMARY KEY,
+            url TEXT NOT NULL,
+            file_path TEXT NOT NULL,
+            title TEXT NOT NULL,
+            downloaded_at REAL NOT NULL
+        );
+        """)
         try execute(sql: """
         UPDATE session_items
         SET had_duplicate_match = 1
         WHERE duplicate_candidate_path IS NOT NULL AND had_duplicate_match = 0;
         """)
 
+        try backfillDownloadedLinksIfNeeded()
+
         try execute(sql: "CREATE INDEX IF NOT EXISTS session_items_session_idx ON session_items(session_id, item_index);")
         try execute(sql: "CREATE INDEX IF NOT EXISTS sessions_created_idx ON sessions(created_at DESC);")
+    }
+
+    /// One-time copy of downloads made before `downloaded_links` existed, so link checks cover them too.
+    private func backfillDownloadedLinksIfNeeded() throws {
+        guard try userVersion() < 1 else { return }
+
+        let selectSQL = """
+        SELECT i.source_url, i.output_file_path, i.title, COALESCE(s.completed_at, s.created_at)
+        FROM session_items i
+        JOIN sessions s ON s.id = i.session_id
+        WHERE i.status = 'completed' AND i.output_file_path IS NOT NULL
+        ORDER BY s.created_at ASC;
+        """
+        var selectStatement: OpaquePointer?
+        defer { sqlite3_finalize(selectStatement) }
+        guard sqlite3_prepare_v2(try database, selectSQL, -1, &selectStatement, nil) == SQLITE_OK else {
+            throw makeError(message: "Failed to prepare downloaded link backfill")
+        }
+
+        let insertSQL = """
+        INSERT OR REPLACE INTO downloaded_links (link_key, url, file_path, title, downloaded_at)
+        VALUES (?, ?, ?, ?, ?);
+        """
+        var insertStatement: OpaquePointer?
+        defer { sqlite3_finalize(insertStatement) }
+        guard sqlite3_prepare_v2(try database, insertSQL, -1, &insertStatement, nil) == SQLITE_OK else {
+            throw makeError(message: "Failed to prepare downloaded link backfill insert")
+        }
+
+        try execute(sql: "BEGIN IMMEDIATE TRANSACTION;")
+        do {
+            var count = 0
+            // Oldest first, so a link downloaded again keeps its latest file.
+            while sqlite3_step(selectStatement) == SQLITE_ROW {
+                let url = sqliteText(selectStatement, column: 0)
+                guard let key = SourceLinkKey.key(for: url) else { continue }
+                sqlite3_reset(insertStatement)
+                sqlite3_clear_bindings(insertStatement)
+                bindText(insertStatement, 1, key)
+                bindText(insertStatement, 2, url)
+                bindText(insertStatement, 3, sqliteText(selectStatement, column: 1))
+                bindText(insertStatement, 4, sqliteText(selectStatement, column: 2))
+                sqlite3_bind_double(insertStatement, 5, sqlite3_column_double(selectStatement, 3))
+                guard sqlite3_step(insertStatement) == SQLITE_DONE else {
+                    throw makeError(message: "Failed to backfill downloaded link")
+                }
+                count += 1
+            }
+            try execute(sql: "PRAGMA user_version = 1;")
+            try execute(sql: "COMMIT;")
+            logger.info("Backfilled \(count) downloaded link(s) from session history")
+        } catch {
+            try? execute(sql: "ROLLBACK;")
+            throw error
+        }
+    }
+
+    private func userVersion() throws -> Int {
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_prepare_v2(try database, "PRAGMA user_version;", -1, &statement, nil) == SQLITE_OK,
+              sqlite3_step(statement) == SQLITE_ROW else {
+            throw makeError(message: "Failed to read schema version")
+        }
+        return Int(sqlite3_column_int(statement, 0))
     }
 
     private var database: OpaquePointer {
@@ -215,9 +329,9 @@ actor DownloadSessionStore {
         let sql = """
         INSERT OR REPLACE INTO sessions (
             id, source_url, kind, display_title, resolved_title, status, attention_reason,
-            created_at, completed_at, output_folder_path, format, error_message, attention_acknowledged, notice
+            created_at, completed_at, output_folder_path, format, error_message, attention_acknowledged, notice, genre
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """
         var statement: OpaquePointer?
         defer { sqlite3_finalize(statement) }
@@ -240,6 +354,7 @@ actor DownloadSessionStore {
         bindOptionalText(statement, 12, session.errorMessage)
         sqlite3_bind_int(statement, 13, session.attentionAcknowledged ? 1 : 0)
         bindOptionalText(statement, 14, session.notice)
+        bindOptionalText(statement, 15, session.genre)
 
         guard sqlite3_step(statement) == SQLITE_DONE else {
             throw makeError(message: "Failed to upsert session")
@@ -262,9 +377,9 @@ actor DownloadSessionStore {
         INSERT INTO session_items (
             id, session_id, source_url, title, status, output_file_path,
             duplicate_candidate_path, duplicate_candidate_title, duplicate_confidence,
-            duplicate_score, duplicate_reason, error_message, item_index, had_duplicate_match, spotify_json
+            duplicate_score, duplicate_reason, error_message, item_index, had_duplicate_match, spotify_json, genre
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """
         var insertStatement: OpaquePointer?
         defer { sqlite3_finalize(insertStatement) }
@@ -295,6 +410,7 @@ actor DownloadSessionStore {
                 15,
                 item.spotify.flatMap { try? JSONEncoder().encode($0) }.flatMap { String(data: $0, encoding: .utf8) }
             )
+            bindOptionalText(insertStatement, 16, item.genre)
 
             guard sqlite3_step(insertStatement) == SQLITE_DONE else {
                 throw makeError(message: "Failed to insert session item")
@@ -306,7 +422,7 @@ actor DownloadSessionStore {
         let sql = """
         SELECT session_id, id, source_url, title, status, output_file_path,
                duplicate_candidate_path, duplicate_candidate_title, duplicate_confidence,
-               duplicate_score, duplicate_reason, error_message, item_index, had_duplicate_match, spotify_json
+               duplicate_score, duplicate_reason, error_message, item_index, had_duplicate_match, spotify_json, genre
         FROM session_items
         ORDER BY session_id ASC, item_index ASC;
         """
@@ -360,7 +476,8 @@ actor DownloadSessionStore {
                 itemIndex: Int(sqlite3_column_int64(statement, 12)),
                 hadDuplicateMatch: sqlite3_column_int(statement, 13) != 0 || duplicateMatch != nil,
                 spotify: sqliteOptionalText(statement, column: 14)
-                    .flatMap { try? JSONDecoder().decode(SpotifyItemInfo.self, from: Data($0.utf8)) }
+                    .flatMap { try? JSONDecoder().decode(SpotifyItemInfo.self, from: Data($0.utf8)) },
+                genre: sqliteOptionalText(statement, column: 15)
             )
             result[sessionID, default: []].append(item)
         }

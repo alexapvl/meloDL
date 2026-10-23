@@ -15,9 +15,45 @@ enum SessionReview: Identifiable {
     }
 }
 
+enum RekordboxImportActivity: Equatable {
+    case importing(count: Int)
+    case removingPlaylist
+    case refreshing
+    /// `leftoverPlaylist` names an import playlist meloDL couldn't safely remove.
+    case finished(imported: Int, leftoverPlaylist: String?)
+    /// Written to meloDL's Rekordbox XML; `note` explains why Rekordbox couldn't be driven.
+    case addedToXML(count: Int, note: String?)
+    case failed(String)
+
+    var isRunning: Bool {
+        switch self {
+        case .importing, .removingPlaylist, .refreshing: return true
+        case .finished, .addedToXML, .failed: return false
+        }
+    }
+
+    init(_ step: RekordboxImporter.Step) {
+        switch step {
+        case .importing(let count): self = .importing(count: count)
+        case .removingPlaylist: self = .removingPlaylist
+        case .refreshing: self = .refreshing
+        }
+    }
+
+    init(_ outcome: RekordboxImporter.Outcome) {
+        switch outcome {
+        case .imported(let count, let leftoverPlaylist): self = .finished(imported: count, leftoverPlaylist: leftoverPlaylist)
+        case .addedToXML(let count, let note): self = .addedToXML(count: count, note: note)
+        }
+    }
+}
+
 @MainActor
 final class DownloadSessionCoordinator: ObservableObject {
     @Published var draftURL = ""
+    /// Rekordbox genre for the next session. nil leaves it to the default genre.
+    @Published var draftGenre: String?
+    @Published private(set) var rekordboxImportActivity: [UUID: RekordboxImportActivity] = [:]
     @Published private(set) var sessions: [DownloadSession] = []
     @Published var selectedSessionID: UUID? {
         didSet {
@@ -73,6 +109,9 @@ final class DownloadSessionCoordinator: ObservableObject {
         Task {
             isSpotifyConnected = await SpotifyService.shared.connectedAccountName != nil
         }
+        Task {
+            await rekordboxLibraryStore.reloadIfSourceChanged()
+        }
         guard !didBootstrap else { return }
         didBootstrap = true
         Task {
@@ -89,7 +128,8 @@ final class DownloadSessionCoordinator: ObservableObject {
             sourceURL: rawURL,
             displayTitle: DownloadSession.fallbackTitle(for: rawURL),
             outputFolderPath: outputFolderPath ?? temporaryDownloadFolderPath ?? appSettings.downloadFolderPath,
-            format: appSettings.format
+            format: appSettings.format,
+            genre: isRekordboxGenreAvailable(for: appSettings.format) ? draftGenre : nil
         )
         session.status = .waitingForSlot
 
@@ -618,6 +658,95 @@ final class DownloadSessionCoordinator: ObservableObject {
         }
     }
 
+    // MARK: - Rekordbox
+
+    /// Genre tagging only shows once a Rekordbox export is loaded, i.e. the user uses Rekordbox.
+    func isRekordboxGenreAvailable(for format: AudioFormat) -> Bool {
+        rekordboxLibraryStore.isActive && format.supportsRekordbox
+    }
+
+    func isInRekordbox(_ item: DownloadSessionItem) -> Bool {
+        item.outputFilePath.map(rekordboxLibraryStore.contains(path:)) ?? false
+    }
+
+    func isWaitingInRekordboxXML(_ item: DownloadSessionItem) -> Bool {
+        item.outputFilePath.map(RekordboxXMLQueue.shared.contains(path:)) ?? false
+    }
+
+    /// Downloaded files that still exist, aren't in the loaded Rekordbox export, and aren't already in meloDL's XML.
+    func rekordboxPendingItems(in session: DownloadSession) -> [DownloadSessionItem] {
+        guard isRekordboxGenreAvailable(for: session.format) else { return [] }
+        return session.items
+            .filter { $0.status == .completed }
+            .filter { item in
+                guard let path = item.outputFilePath, FileManager.default.fileExists(atPath: path) else { return false }
+                return !rekordboxLibraryStore.contains(path: path) && !RekordboxXMLQueue.shared.contains(path: path)
+            }
+            .sorted { $0.itemIndex < $1.itemIndex }
+    }
+
+    var isRekordboxBusy: Bool {
+        rekordboxImportActivity.values.contains(where: \.isRunning)
+    }
+
+    func setGenre(_ genre: String?, forItem itemID: UUID, in sessionID: UUID) {
+        mutateSession(sessionID) { session in
+            guard let index = session.items.firstIndex(where: { $0.id == itemID }) else { return }
+            session.items[index].genre = genre
+        }
+    }
+
+    func setGenreForPendingItems(_ genre: String?, in sessionID: UUID) {
+        guard let session = sessions.first(where: { $0.id == sessionID }) else { return }
+        let pendingIDs = Set(rekordboxPendingItems(in: session).map(\.id))
+        mutateSession(sessionID) { session in
+            for index in session.items.indices where pendingIDs.contains(session.items[index].id) {
+                session.items[index].genre = genre
+            }
+        }
+    }
+
+    func dismissRekordboxImportActivity(for sessionID: UUID) {
+        guard rekordboxImportActivity[sessionID]?.isRunning == false else { return }
+        rekordboxImportActivity[sessionID] = nil
+    }
+
+    /// Writes each track's genre into the file and adds the tracks to the Rekordbox collection.
+    func importToRekordbox(sessionID: UUID) {
+        guard !isRekordboxBusy else { return }
+        Task {
+            await rekordboxLibraryStore.reloadIfSourceChanged()
+            guard let session = sessions.first(where: { $0.id == sessionID }) else { return }
+            let tracks = rekordboxPendingItems(in: session).compactMap { item -> RekordboxXMLTrack? in
+                guard let path = item.outputFilePath else { return nil }
+                return RekordboxXMLTrack(
+                    path: path,
+                    name: item.spotify?.track.title,
+                    artist: item.spotify?.track.artistLine,
+                    genre: session.effectiveGenre(for: item, defaultGenre: appSettings.rekordboxDefaultGenre),
+                    comment: item.sourceURL
+                )
+            }
+            guard !tracks.isEmpty else { return }
+
+            rekordboxImportActivity[sessionID] = .importing(count: tracks.count)
+            do {
+                let outcome = try await RekordboxImporter.shared.importTracks(
+                    tracks,
+                    playlistName: session.displayTitle,
+                    keepsPlaylist: appSettings.rekordboxKeepsImportPlaylist
+                ) { step in
+                    rekordboxImportActivity[sessionID] = RekordboxImportActivity(step)
+                }
+                rekordboxImportActivity[sessionID] = RekordboxImportActivity(outcome)
+            } catch {
+                rekordboxImportActivity[sessionID] = .failed(error.localizedDescription)
+            }
+            schedulePostDownloadReindex()
+            NSApplication.shared.activate(ignoringOtherApps: true)
+        }
+    }
+
     // MARK: - Duplicates
 
     private func checkDuplicates(for sessionID: UUID, entries: [PlaylistEntry]) async {
@@ -630,12 +759,17 @@ final class DownloadSessionCoordinator: ObservableObject {
 
         do {
             await TrackIndexer.shared.reindexIfNeeded(roots: appSettings.duplicateIndexRoots)
+            await rekordboxLibraryStore.reloadIfSourceChanged()
             var duplicateSnapshotsByURL: [String: DuplicateMatchSnapshot] = [:]
 
             for entry in entries {
+                if let snapshot = await sameLinkDuplicate(for: entry.url) {
+                    duplicateSnapshotsByURL[entry.url] = snapshot
+                    continue
+                }
                 let matches = try await duplicateDetectionService.findPotentialDuplicates(
                     title: entry.title,
-                    expectedDurationSec: entry.metadata?.durationSec
+                    expectedDurationSec: entry.metadata?.durationSec ?? entry.durationSec
                 )
                 if let first = matches.first {
                     duplicateSnapshotsByURL[entry.url] = DuplicateMatchSnapshot(match: first)
@@ -672,6 +806,30 @@ final class DownloadSessionCoordinator: ObservableObject {
                 }
             }
         }
+    }
+
+    /// A link downloaded before, by meloDL or found in a Rekordbox track's comments, is a sure duplicate.
+    private func sameLinkDuplicate(for url: String) async -> DuplicateMatchSnapshot? {
+        guard let key = SourceLinkKey.key(for: url) else { return nil }
+        let fileManager = FileManager.default
+
+        if let path = try? await sessionStore.downloadedFilePath(forLinkKey: key), fileManager.fileExists(atPath: path) {
+            return Self.sameLinkSnapshot(path: path, reason: "Same link downloaded before")
+        }
+        if let path = rekordboxLibraryStore.path(forSourceLinkKey: key), fileManager.fileExists(atPath: path) {
+            return Self.sameLinkSnapshot(path: path, reason: "Same link already in Rekordbox")
+        }
+        return nil
+    }
+
+    private static func sameLinkSnapshot(path: String, reason: String) -> DuplicateMatchSnapshot {
+        DuplicateMatchSnapshot(
+            candidatePath: path,
+            candidateTitle: URL(fileURLWithPath: path).lastPathComponent,
+            confidence: .high,
+            score: 1.0,
+            reason: reason
+        )
     }
 
     private func startDownloadPhase(_ sessionID: UUID, engine: DownloadEngine, entries: [PlaylistEntry]) async {
@@ -756,11 +914,24 @@ final class DownloadSessionCoordinator: ObservableObject {
                 item.outputFilePath = filepath
                 item.status = .completed
             }
+            recordDownloadedLink(sourceURL: sourceURL, filePath: filepath, in: sessionID)
 
         case .error(let sourceURL, let message, _):
             mutateItem(sourceURL: sourceURL, in: sessionID) { item in
                 item.status = .failed
                 item.errorMessage = message
+            }
+        }
+    }
+
+    private func recordDownloadedLink(sourceURL: String, filePath: String, in sessionID: UUID) {
+        guard let key = SourceLinkKey.key(for: sourceURL) else { return }
+        let title = sessions.first { $0.id == sessionID }?.items.first { $0.sourceURL == sourceURL }?.title ?? sourceURL
+        Task {
+            do {
+                try await sessionStore.recordDownloadedLink(key: key, url: sourceURL, filePath: filePath, title: title)
+            } catch {
+                logger.failure("Failed to record downloaded link: \(error.localizedDescription)")
             }
         }
     }
@@ -924,7 +1095,10 @@ final class DownloadSessionCoordinator: ObservableObject {
     private func downloadConfiguration(for session: DownloadSession) -> DownloadConfiguration {
         DownloadConfiguration(
             fastDownloads: appSettings.fastDownloads,
-            outputFolder: URL(fileURLWithPath: session.outputFolderPath, isDirectory: true)
+            outputFolder: URL(fileURLWithPath: session.outputFolderPath, isDirectory: true),
+            genre: isRekordboxGenreAvailable(for: session.format)
+                ? session.genre ?? appSettings.rekordboxDefaultGenre
+                : nil
         )
     }
 
