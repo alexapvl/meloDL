@@ -165,6 +165,33 @@ final class DownloadSessionCoordinator: ObservableObject {
         scheduleWaitingSessions()
     }
 
+    #if DEBUG
+    /// Moves a stopped session's finished files to `folderPath` and downloads the rest there.
+    func relocateSession(_ sessionID: UUID, to folderPath: String) throws {
+        guard let session = sessions.first(where: { $0.id == sessionID }), !session.status.isActive else { return }
+        let fileManager = FileManager.default
+        try fileManager.createDirectory(atPath: folderPath, withIntermediateDirectories: true)
+
+        var movedPaths: [UUID: String] = [:]
+        for item in session.items {
+            guard let path = item.outputFilePath, fileManager.fileExists(atPath: path) else { continue }
+            let destination = (folderPath as NSString).appendingPathComponent((path as NSString).lastPathComponent)
+            if !fileManager.fileExists(atPath: destination) {
+                try fileManager.moveItem(atPath: path, toPath: destination)
+            }
+            movedPaths[item.id] = destination
+        }
+        mutateSession(sessionID) { session in
+            session.outputFolderPath = folderPath
+            for index in session.items.indices {
+                if let moved = movedPaths[session.items[index].id] {
+                    session.items[index].outputFilePath = moved
+                }
+            }
+        }
+    }
+    #endif
+
     func retrySession(_ sessionID: UUID) {
         mutateSession(sessionID) { session in
             session.status = .waitingForSlot

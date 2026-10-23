@@ -7,13 +7,14 @@ import Foundation
 /// and each writes its result as JSON to `~/Library/Application Support/meloDL/agent/<id>.json`.
 ///
 /// - `status`: every session with its items, current review and Rekordbox state
-/// - `download?url=&folder=&genre=`: start a session; `genre` is optional
+/// - `download?url=&folder=&genre=`: start a session; `genre=` (empty) means no genre, leaving it out uses the default
 /// - `review?session=&item=&action=skip|download`: resolve the session's current review, which must be `item`
 /// - `genres?session=&file=`: set item genres from a JSON file `{ "<item id>": "Genre" | "" | null }`,
 ///   where "" means no genre and null falls back to the session or default genre
 /// - `import?session=`: import the session's pending tracks into Rekordbox
 /// - `refresh`: export the Rekordbox collection and reload it
-/// - `cancel?session=`: cancel a session
+/// - `cancel?session=`, `retry?session=`: cancel a session, or retry its failed and cancelled tracks
+/// - `relocate?session=&folder=`: move a stopped session's finished files to `folder` and download the rest there
 @MainActor
 enum AgentControl {
     static let responseFolder: URL = FileManager.default
@@ -25,8 +26,10 @@ enum AgentControl {
               let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return }
         let command = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         var query: [String: String] = [:]
-        for item in components.queryItems ?? [] {
-            query[item.name] = item.value ?? ""
+        // Form-style encoding sends spaces as "+", which URLComponents keeps literally.
+        for item in components.percentEncodedQueryItems ?? [] {
+            let value = (item.value ?? "").replacingOccurrences(of: "+", with: " ")
+            query[item.name] = value.removingPercentEncoding ?? value
         }
         let requestID = query["id"] ?? UUID().uuidString
 
@@ -62,7 +65,8 @@ enum AgentControl {
         case "download":
             guard let url = query["url"], !url.isEmpty else { throw AgentError("Missing url") }
             coordinator.draftURL = url
-            coordinator.draftGenre = query["genre"].flatMap { $0.isEmpty ? nil : $0 }
+            // An empty genre means no genre, unlike a missing one, which falls back to the default genre.
+            coordinator.draftGenre = query["genre"]
             coordinator.submitDraftURL(outputFolderPath: query["folder"].flatMap { $0.isEmpty ? nil : $0 })
             return ["ok": true, "session": coordinator.selectedSessionID?.uuidString ?? ""]
 
@@ -107,6 +111,15 @@ enum AgentControl {
 
         case "cancel":
             coordinator.cancelSession(try session().id)
+            return ["ok": true]
+
+        case "retry":
+            coordinator.retrySession(try session().id)
+            return ["ok": true]
+
+        case "relocate":
+            guard let folder = query["folder"], !folder.isEmpty else { throw AgentError("Missing folder") }
+            try coordinator.relocateSession(try session().id, to: folder)
             return ["ok": true]
 
         default:
