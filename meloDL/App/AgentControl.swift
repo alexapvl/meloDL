@@ -1,4 +1,5 @@
 #if DEBUG
+import CoreGraphics
 import Foundation
 
 /// Debug-only control surface for driving meloDL from scripts and agents.
@@ -60,7 +61,13 @@ enum AgentControl {
 
         switch command {
         case "status":
-            return ["ok": true, "sessions": coordinator.sessions.map { describe($0, coordinator: coordinator) }]
+            return [
+                "ok": true,
+                "canDriveRekordbox": RekordboxImporter.shared.canDriveRekordbox,
+                "screenRecording": CGPreflightScreenCaptureAccess(),
+                "rekordboxTracks": RekordboxLibraryStore.shared.trackCount,
+                "sessions": coordinator.sessions.map { describe($0, coordinator: coordinator) }
+            ]
 
         case "download":
             guard let url = query["url"], !url.isEmpty else { throw AgentError("Missing url") }
