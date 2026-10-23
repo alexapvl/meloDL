@@ -36,7 +36,11 @@ actor DuplicateDetectionService {
             var strength = match.strength
             if let expectedDurationSec, let candidateDuration = entry.title.durationSec {
                 let delta = abs(expectedDurationSec - candidateDuration)
-                if delta <= 2 {
+                if delta <= 1.5, match.score >= 0.95, match.isSameVersion {
+                    // Same title and the same length to the second is the same recording,
+                    // even for one-word titles; remixes and edits almost never match that closely.
+                    strength = .high
+                } else if delta <= 2 {
                     // Same length backs up a title match, e.g. a one-word title like "Echo".
                     strength = strength == .low ? .medium : .high
                 } else if delta > 3 {

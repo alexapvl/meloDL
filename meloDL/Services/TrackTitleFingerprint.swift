@@ -70,6 +70,8 @@ struct TrackTitleFingerprint: Sendable {
         let score: Double
         let strength: Strength
         let reason: String
+        /// Same version words and episode numbers on both sides.
+        let isSameVersion: Bool
     }
 
     /// nil when the titles describe different recordings.
@@ -129,7 +131,12 @@ struct TrackTitleFingerprint: Sendable {
         } else {
             reason = "Similar title"
         }
-        return Match(score: min(score, 1), strength: strength, reason: reason)
+        return Match(
+            score: min(score, 1),
+            strength: strength,
+            reason: reason,
+            isSameVersion: versionSignature == other.versionSignature && numbers == other.numbers
+        )
     }
 
     /// Words worth looking up candidates by.
