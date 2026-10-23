@@ -78,14 +78,11 @@ private final class RekordboxTrackPathParserDelegate: NSObject, XMLParserDelegat
         }
     }
 
+    /// Rekordbox leaves characters like "?" and "#" unencoded, so the location can't be parsed as a URL.
     private static func decodeFilePath(fromLocation location: String) -> String? {
-        guard let url = URL(string: location), url.isFileURL else {
-            return nil
-        }
-        var path = url.path
-        if path.isEmpty {
-            path = (location as NSString).removingPercentEncoding ?? location
-        }
-        return path
+        let prefixes = ["file://localhost/", "file:///"]
+        guard let prefix = prefixes.first(where: location.hasPrefix) else { return nil }
+        let encodedPath = "/" + location.dropFirst(prefix.count)
+        return encodedPath.removingPercentEncoding ?? encodedPath
     }
 }
