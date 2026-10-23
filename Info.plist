@@ -4,6 +4,17 @@
 <dict>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>meloDL uses System Events to import downloads into Rekordbox and export your Rekordbox collection.</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.alexapvl.meloDL.agent</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>melodl</string>
+			</array>
+		</dict>
+	</array>
 	<key>LSUIElement</key>
 	<true/>
 	<key>SUFeedURL</key>

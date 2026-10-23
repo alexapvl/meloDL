@@ -313,6 +313,15 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
     static weak var sessionCoordinator: DownloadSessionCoordinator?
     var menuBarController: MenuBarController?
 
+    #if DEBUG
+    func application(_ application: NSApplication, open urls: [URL]) {
+        guard let sessionCoordinator = Self.sessionCoordinator else { return }
+        for url in urls where url.scheme == "melodl" {
+            AgentControl.handle(url, coordinator: sessionCoordinator)
+        }
+    }
+    #endif
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         let menubarOnly = UserDefaults.standard.bool(forKey: SettingsKeys.menubarOnlyMode)
         let onboardingCompleted = UserDefaults.standard.bool(forKey: SettingsKeys.onboardingCompleted)
