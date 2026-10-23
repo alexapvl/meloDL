@@ -59,7 +59,9 @@ final class RekordboxLibraryStore {
 
         do {
             let data = try Data(contentsOf: fileURL)
-            let persisted = try JSONDecoder().decode(PersistedState.self, from: data)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let persisted = try decoder.decode(PersistedState.self, from: data)
             canonicalPaths = Set(persisted.canonicalPaths)
             trackCount = persisted.trackCount
             sourceFilename = persisted.sourceFilename
