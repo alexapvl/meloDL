@@ -14,6 +14,18 @@ struct IndexedTrack: Sendable {
     let hashPrefix: String?
     let contentHash: String?
     let lastSeenAt: Date
+    /// Title from the file's own tags; `artistHint` holds the artist tag.
+    var titleTag: String? = nil
+    /// Which metadata reader filled `durationSec` and the tags; older rows get read again.
+    var metadataVersion = 0
+}
+
+struct IndexedTitle: Sendable {
+    let path: String
+    let filename: String
+    let durationSec: Double?
+    let artistTag: String?
+    let titleTag: String?
 }
 
 struct ExactDuplicateFileEntry: Identifiable, Sendable {
@@ -322,8 +334,9 @@ actor TrackIndexStore {
 
         let sql = """
         INSERT INTO tracks(
-            path, root_path, filename, normalized_title, artist_hint, duration_sec, filesize, mtime, hash_prefix, content_hash, last_seen_at
-        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            path, root_path, filename, normalized_title, artist_hint, duration_sec, filesize, mtime, hash_prefix, content_hash, last_seen_at,
+            title_tag, metadata_version
+        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(path) DO UPDATE SET
             root_path = excluded.root_path,
             filename = excluded.filename,
@@ -334,7 +347,9 @@ actor TrackIndexStore {
             mtime = excluded.mtime,
             hash_prefix = excluded.hash_prefix,
             content_hash = excluded.content_hash,
-            last_seen_at = excluded.last_seen_at;
+            last_seen_at = excluded.last_seen_at,
+            title_tag = excluded.title_tag,
+            metadata_version = excluded.metadata_version;
         """
         var statement: OpaquePointer?
         defer { sqlite3_finalize(statement) }
@@ -382,65 +397,66 @@ actor TrackIndexStore {
 
         sqlite3_bind_double(statement, 11, track.lastSeenAt.timeIntervalSince1970)
 
+        if let titleTag = track.titleTag {
+            bindText(titleTag, to: statement, at: 12)
+        } else {
+            sqlite3_bind_null(statement, 12)
+        }
+        sqlite3_bind_int(statement, 13, Int32(track.metadataVersion))
+
         guard sqlite3_step(statement) == SQLITE_DONE else {
             throw makeError(message: "Failed to upsert track at path: \(track.path)")
         }
     }
 
-    func fetchCandidateTracks(forNormalizedTitle normalizedTitle: String, limit: Int) throws -> [IndexedTrack] {
+    /// Every indexed file name, for title matching.
+    func fetchTitleCorpus() throws -> [IndexedTitle] {
         try ensureReady()
-        let normalized = normalizedTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !normalized.isEmpty else { return [] }
-
-        let firstToken = normalized.split(separator: " ").first.map(String.init) ?? normalized
-        let likeToken = "%\(firstToken)%"
-        let sql = """
-        SELECT path, root_path, filename, normalized_title, artist_hint, duration_sec, filesize, mtime, hash_prefix, content_hash, last_seen_at
-        FROM tracks
-        WHERE normalized_title LIKE ?
-        ORDER BY last_seen_at DESC
-        LIMIT ?;
-        """
-
+        let sql = "SELECT path, filename, duration_sec, artist_hint, title_tag FROM tracks;"
         var statement: OpaquePointer?
         defer { sqlite3_finalize(statement) }
 
         guard sqlite3_prepare_v2(try database, sql, -1, &statement, nil) == SQLITE_OK else {
-            throw makeError(message: "Failed to prepare candidate tracks query")
+            throw makeError(message: "Failed to prepare title corpus query")
         }
 
-        bindText(likeToken, to: statement, at: 1)
-        sqlite3_bind_int64(statement, 2, Int64(max(1, limit)))
-
-        var results: [IndexedTrack] = []
+        var results: [IndexedTitle] = []
         while sqlite3_step(statement) == SQLITE_ROW {
-            let path = sqliteText(statement, column: 0)
-            let rootPath = sqliteText(statement, column: 1)
-            let filename = sqliteText(statement, column: 2)
-            let normalizedTitle = sqliteText(statement, column: 3)
-            let artistHint = sqliteOptionalText(statement, column: 4)
-            let durationSec = sqliteOptionalDouble(statement, column: 5)
-            let filesize = sqliteOptionalInt64(statement, column: 6)
-            let mtime = Date(timeIntervalSince1970: sqlite3_column_double(statement, 7))
-            let hashPrefix = sqliteOptionalText(statement, column: 8)
-            let contentHash = sqliteOptionalText(statement, column: 9)
-            let lastSeenAt = Date(timeIntervalSince1970: sqlite3_column_double(statement, 10))
-
-            results.append(IndexedTrack(
-                path: path,
-                rootPath: rootPath,
-                filename: filename,
-                normalizedTitle: normalizedTitle,
-                artistHint: artistHint,
-                durationSec: durationSec,
-                filesize: filesize,
-                mtime: mtime,
-                hashPrefix: hashPrefix,
-                contentHash: contentHash,
-                lastSeenAt: lastSeenAt
+            results.append(IndexedTitle(
+                path: sqliteText(statement, column: 0),
+                filename: sqliteText(statement, column: 1),
+                durationSec: sqliteOptionalDouble(statement, column: 2),
+                artistTag: sqliteOptionalText(statement, column: 3),
+                titleTag: sqliteOptionalText(statement, column: 4)
             ))
         }
         return results
+    }
+
+    func countTracksNeedingMetadata(currentVersion: Int) throws -> Int {
+        try ensureReady()
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_prepare_v2(try database, "SELECT COUNT(*) FROM tracks WHERE metadata_version < ?;", -1, &statement, nil) == SQLITE_OK else {
+            throw makeError(message: "Failed to prepare metadata count query")
+        }
+        sqlite3_bind_int(statement, 1, Int32(currentVersion))
+        guard sqlite3_step(statement) == SQLITE_ROW else { return 0 }
+        return Int(sqlite3_column_int64(statement, 0))
+    }
+
+    /// Changes whenever tracks are added, removed, or modified.
+    func titleCorpusMarker() throws -> String {
+        try ensureReady()
+        let sql = "SELECT COUNT(*), COALESCE(MAX(last_seen_at), 0), COALESCE(SUM(mtime), 0), COALESCE(SUM(metadata_version), 0) FROM tracks;"
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+
+        guard sqlite3_prepare_v2(try database, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw makeError(message: "Failed to prepare title corpus marker query")
+        }
+        guard sqlite3_step(statement) == SQLITE_ROW else { return "" }
+        return (Int32(0) ..< 4).map { "\(sqlite3_column_double(statement, $0))" }.joined(separator: "-")
     }
 
     func fetchTrack(atPath path: String) throws -> IndexedTrack? {
@@ -449,7 +465,8 @@ actor TrackIndexStore {
         guard !canonicalPath.isEmpty else { return nil }
 
         let sql = """
-        SELECT path, root_path, filename, normalized_title, artist_hint, duration_sec, filesize, mtime, hash_prefix, content_hash, last_seen_at
+        SELECT path, root_path, filename, normalized_title, artist_hint, duration_sec, filesize, mtime, hash_prefix, content_hash, last_seen_at,
+               title_tag, metadata_version
         FROM tracks
         WHERE path = ?
         LIMIT 1;
@@ -474,7 +491,9 @@ actor TrackIndexStore {
             mtime: Date(timeIntervalSince1970: sqlite3_column_double(statement, 7)),
             hashPrefix: sqliteOptionalText(statement, column: 8),
             contentHash: sqliteOptionalText(statement, column: 9),
-            lastSeenAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 10))
+            lastSeenAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 10)),
+            titleTag: sqliteOptionalText(statement, column: 11),
+            metadataVersion: Int(sqlite3_column_int(statement, 12))
         )
     }
 
@@ -601,6 +620,8 @@ actor TrackIndexStore {
             column: "content_hash",
             definition: "TEXT"
         )
+        try ensureColumnExists(table: "tracks", column: "title_tag", definition: "TEXT")
+        try ensureColumnExists(table: "tracks", column: "metadata_version", definition: "INTEGER NOT NULL DEFAULT 0")
 
         try execute(sql: """
         CREATE INDEX IF NOT EXISTS idx_tracks_normalized_title

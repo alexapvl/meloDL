@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import CryptoKit
 import os
@@ -13,6 +14,10 @@ actor TrackIndexer {
     private let store: TrackIndexStore
     private let defaults = UserDefaults.standard
     private let lastIndexKey = "duplicateIndex.lastSuccessfulReindexAt"
+    /// Set while a pass runs, so a pass cut short by quitting resumes on the next launch.
+    private let passInProgressKey = "duplicateIndex.passInProgress"
+    /// Bump when the metadata read per file changes, so existing rows are read again.
+    static let metadataVersion = 1
     private let reindexInterval: TimeInterval = 24 * 60 * 60
     private var isIndexing = false
     private var pendingRoots: Set<String> = []
@@ -70,6 +75,7 @@ actor TrackIndexer {
             }
             if shouldRunPass {
                 let passStartedAt = Date()
+                defaults.set(true, forKey: passInProgressKey)
                 do {
                     try await store.ensureReady()
                     try await store.replaceRoots(with: roots)
@@ -81,6 +87,7 @@ actor TrackIndexer {
                     }
 
                     defaults.set(Date().timeIntervalSince1970, forKey: lastIndexKey)
+                    defaults.set(false, forKey: passInProgressKey)
                     logger.info("Reindex finished. Indexed \(indexedCount) files across \(roots.count) roots.")
                 } catch {
                     logger.failure("Reindex failed: \(error.localizedDescription)")
@@ -98,8 +105,11 @@ actor TrackIndexer {
     private func shouldRunIfNeeded() async -> Bool {
         let lastIndex = defaults.double(forKey: lastIndexKey)
         let intervalElapsed = lastIndex <= 0 || Date().timeIntervalSince1970 - lastIndex >= reindexInterval
-        if intervalElapsed { return true }
+        if intervalElapsed || defaults.bool(forKey: passInProgressKey) { return true }
         do {
+            if try await store.countTracksNeedingMetadata(currentVersion: Self.metadataVersion) > 0 {
+                return true
+            }
             return try await store.countTracks() == 0
         } catch {
             logger.failure("Failed to count tracks before reindex decision: \(error.localizedDescription)")
@@ -145,19 +155,27 @@ actor TrackIndexer {
                     existingTrack: existingTrack
                 )
                 let hashPrefix = contentHash.map { String($0.prefix(16)) }
+                let metadata = await resolveMetadata(
+                    for: fileURL,
+                    filesize: filesize,
+                    mtime: mtime,
+                    existingTrack: existingTrack
+                )
 
                 let track = IndexedTrack(
                     path: fileURL.path,
                     rootPath: rootPath,
                     filename: filename,
                     normalizedTitle: normalizedTitle,
-                    artistHint: nil,
-                    durationSec: nil,
+                    artistHint: metadata.artist,
+                    durationSec: metadata.durationSec,
                     filesize: filesize,
                     mtime: mtime,
                     hashPrefix: hashPrefix,
                     contentHash: contentHash,
-                    lastSeenAt: passStartedAt
+                    lastSeenAt: passStartedAt,
+                    titleTag: metadata.title,
+                    metadataVersion: Self.metadataVersion
                 )
                 try await store.upsertTrack(track)
                 indexedCount += 1
@@ -205,6 +223,50 @@ actor TrackIndexer {
             return existingHash
         }
         return try sha256Hex(for: fileURL)
+    }
+
+    private struct FileMetadata {
+        var durationSec: Double?
+        var artist: String?
+        var title: String?
+    }
+
+    /// Unchanged files keep what was read before, so only new or edited files are opened.
+    private func resolveMetadata(
+        for fileURL: URL,
+        filesize: Int64?,
+        mtime: Date,
+        existingTrack: IndexedTrack?
+    ) async -> FileMetadata {
+        if let existingTrack,
+           existingTrack.metadataVersion >= Self.metadataVersion,
+           existingTrack.filesize == filesize,
+           abs(existingTrack.mtime.timeIntervalSince1970 - mtime.timeIntervalSince1970) < 0.5 {
+            return FileMetadata(durationSec: existingTrack.durationSec, artist: existingTrack.artistHint, title: existingTrack.titleTag)
+        }
+        return await readMetadata(for: fileURL)
+    }
+
+    /// Reads only the header: length plus artist and title tags. Formats AVFoundation can't open just get nothing.
+    private func readMetadata(for fileURL: URL) async -> FileMetadata {
+        let asset = AVURLAsset(url: fileURL)
+        guard let (duration, metadata) = try? await asset.load(.duration, .commonMetadata) else {
+            return FileMetadata()
+        }
+
+        func string(_ identifier: AVMetadataIdentifier) async -> String? {
+            guard let item = AVMetadataItem.metadataItems(from: metadata, filteredByIdentifier: identifier).first,
+                  let value = try? await item.load(.stringValue)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !value.isEmpty else { return nil }
+            return value
+        }
+
+        let seconds = duration.seconds
+        return FileMetadata(
+            durationSec: seconds.isFinite && seconds > 0 ? seconds : nil,
+            artist: await string(.commonIdentifierArtist),
+            title: await string(.commonIdentifierTitle)
+        )
     }
 
     private func sha256Hex(for fileURL: URL) throws -> String? {

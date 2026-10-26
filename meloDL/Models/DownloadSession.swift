@@ -16,6 +16,8 @@ struct DownloadSession: Identifiable, Sendable {
     var errorMessage: String?
     var attentionAcknowledged: Bool
     var notice: String?
+    /// Rekordbox genre picked before the download; tracks without their own genre use it.
+    var genre: String?
 
     init(
         id: UUID = UUID(),
@@ -32,7 +34,8 @@ struct DownloadSession: Identifiable, Sendable {
         items: [DownloadSessionItem] = [],
         errorMessage: String? = nil,
         attentionAcknowledged: Bool = false,
-        notice: String? = nil
+        notice: String? = nil,
+        genre: String? = nil
     ) {
         self.id = id
         self.sourceURL = sourceURL
@@ -49,6 +52,7 @@ struct DownloadSession: Identifiable, Sendable {
         self.errorMessage = errorMessage
         self.attentionAcknowledged = attentionAcknowledged
         self.notice = notice
+        self.genre = genre
     }
 
     var needsAttention: Bool {
@@ -90,6 +94,10 @@ struct DownloadSession: Identifiable, Sendable {
         guard status == .completedWithErrors else { return nil }
         let total = downloadableItemCount
         return "\(completedItemCount)/\(total) downloaded, \(failedItemCount) failed — \(displayTitle)"
+    }
+
+    func effectiveGenre(for item: DownloadSessionItem, defaultGenre: String) -> String {
+        item.genre ?? genre ?? defaultGenre
     }
 
     var completedFilePaths: [String] {
@@ -225,6 +233,7 @@ struct DownloadSessionItem: Identifiable, Sendable {
     var itemIndex: Int
     var hadDuplicateMatch: Bool
     var spotify: SpotifyItemInfo?
+    var genre: String?
 
     init(
         id: UUID = UUID(),
@@ -236,7 +245,8 @@ struct DownloadSessionItem: Identifiable, Sendable {
         errorMessage: String? = nil,
         itemIndex: Int,
         hadDuplicateMatch: Bool = false,
-        spotify: SpotifyItemInfo? = nil
+        spotify: SpotifyItemInfo? = nil,
+        genre: String? = nil
     ) {
         self.id = id
         self.sourceURL = sourceURL
@@ -248,6 +258,7 @@ struct DownloadSessionItem: Identifiable, Sendable {
         self.itemIndex = itemIndex
         self.hadDuplicateMatch = hadDuplicateMatch
         self.spotify = spotify
+        self.genre = genre
     }
 
     var isSkippedDuplicate: Bool {

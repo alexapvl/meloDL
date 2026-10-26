@@ -15,55 +15,47 @@ actor DuplicateDetectionService {
     }
 
     func findPotentialDuplicates(title: String, expectedDurationSec: Double? = nil) async throws -> [DuplicateMatch] {
-        let normalizedTitle = Self.normalize(title)
-        guard !normalizedTitle.isEmpty else { return [] }
+        let incoming = TrackTitleFingerprint(title)
+        guard !incoming.isEmpty else { return [] }
 
-        let candidates = try await indexStore.fetchCandidateTracks(forNormalizedTitle: normalizedTitle, limit: 250)
-        guard !candidates.isEmpty else { return [] }
+        let corpus = try await currentCorpus()
+        var candidateIndices = Set<Int>()
+        for token in incoming.searchTokens {
+            candidateIndices.formUnion(corpus.indicesByToken[token] ?? [])
+        }
 
         var matches: [DuplicateMatch] = []
+        for index in candidateIndices {
+            let entry = corpus.entries[index]
+            // The file's own tags can name the track better than its file name.
+            let byName = incoming.match(entry.fingerprint)
+            let byTags = entry.tagFingerprint.flatMap(incoming.match)
+            guard let match = [byName, byTags].compactMap({ $0 }).max(by: { $0.score < $1.score }) else { continue }
 
-        for candidate in candidates {
-            let candidateTitle = candidate.normalizedTitle
-            guard !candidateTitle.isEmpty else { continue }
-
-            if candidateTitle == normalizedTitle {
-                matches.append(DuplicateMatch(
-                    candidatePath: candidate.path,
-                    candidateTitle: candidate.filename,
-                    confidence: .high,
-                    score: 1.0,
-                    reason: "Exact normalized title match"
-                ))
-                continue
-            }
-
-            var score = Self.normalizedSimilarity(normalizedTitle, candidateTitle)
-
-            if let expectedDurationSec,
-               let candidateDuration = candidate.durationSec {
+            var score = match.score
+            var strength = match.strength
+            if let expectedDurationSec, let candidateDuration = entry.title.durationSec {
                 let delta = abs(expectedDurationSec - candidateDuration)
-                if delta > 3 {
+                if delta <= 1.5, match.score >= 0.95, match.isSameVersion {
+                    // Same title and the same length to the second is the same recording,
+                    // even for one-word titles; remixes and edits almost never match that closely.
+                    strength = .high
+                } else if delta <= 2 {
+                    // Same length backs up a title match, e.g. a one-word title like "Echo".
+                    strength = strength == .low ? .medium : .high
+                } else if delta > 3 {
                     score -= 0.25
+                    strength = .low
                 }
             }
-
             guard score >= 0.72 else { continue }
-            let confidence: DuplicateMatch.Confidence
-            if score >= 0.90 {
-                confidence = .high
-            } else if score >= 0.82 {
-                confidence = .medium
-            } else {
-                confidence = .low
-            }
 
             matches.append(DuplicateMatch(
-                candidatePath: candidate.path,
-                candidateTitle: candidate.filename,
-                confidence: confidence,
+                candidatePath: entry.title.path,
+                candidateTitle: entry.title.filename,
+                confidence: Self.confidence(for: strength),
                 score: max(0, min(1, score)),
-                reason: "Fuzzy title similarity"
+                reason: match.reason
             ))
         }
 
@@ -73,75 +65,69 @@ actor DuplicateDetectionService {
         return topMatches
     }
 
+    private struct CorpusEntry {
+        let title: IndexedTitle
+        let fingerprint: TrackTitleFingerprint
+        let tagFingerprint: TrackTitleFingerprint?
+    }
+
+    private struct Corpus {
+        let marker: String
+        let entries: [CorpusEntry]
+        let indicesByToken: [String: Set<Int>]
+    }
+
+    private var corpus: Corpus?
+
+    /// Fingerprints of every indexed file, rebuilt only when the index changes.
+    private func currentCorpus() async throws -> Corpus {
+        let marker = try await indexStore.titleCorpusMarker()
+        if let corpus, corpus.marker == marker {
+            return corpus
+        }
+
+        let entries = try await indexStore.fetchTitleCorpus().map { title in
+            let tagFingerprint = title.titleTag.map { tagTitle in
+                TrackTitleFingerprint(title.artistTag.map { "\($0) - \(tagTitle)" } ?? tagTitle)
+            }
+            return CorpusEntry(
+                title: title,
+                fingerprint: TrackTitleFingerprint((title.filename as NSString).deletingPathExtension),
+                tagFingerprint: tagFingerprint
+            )
+        }
+        var indicesByToken: [String: Set<Int>] = [:]
+        for (index, entry) in entries.enumerated() {
+            let tokens = entry.fingerprint.searchTokens.union(entry.tagFingerprint?.searchTokens ?? [])
+            for token in tokens {
+                indicesByToken[token, default: []].insert(index)
+            }
+        }
+        let rebuilt = Corpus(marker: marker, entries: entries, indicesByToken: indicesByToken)
+        corpus = rebuilt
+        return rebuilt
+    }
+
+    private static func confidence(for strength: TrackTitleFingerprint.Strength) -> DuplicateMatch.Confidence {
+        switch strength {
+        case .high: return .high
+        case .medium: return .medium
+        case .low: return .low
+        }
+    }
+
     func findExactDuplicateFileGroups(limit: Int = 300) async throws -> [ExactDuplicateGroup] {
         let groups = try await indexStore.fetchExactDuplicateGroups(limit: limit)
         logger.info("Exact duplicate scan produced \(groups.count) grouped duplicate hash(es)")
         return groups
     }
 
+    /// Lowercased letters and digits of any script, accents removed.
     static func normalize(_ input: String) -> String {
-        let lowered = input
-            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
-            .lowercased()
-        let sanitized = lowered.replacingOccurrences(
-            of: #"[^a-z0-9\s]"#,
-            with: " ",
-            options: .regularExpression
-        )
-        return sanitized
-            .split(whereSeparator: \.isWhitespace)
-            .map(String.init)
-            .joined(separator: " ")
+        TrackTitleFingerprint.tokens(TrackTitleFingerprint.fold(input)).joined(separator: " ")
     }
 
     static func titleSimilarity(_ a: String, _ b: String) -> Double {
-        normalizedSimilarity(normalize(a), normalize(b))
-    }
-
-    private static func normalizedSimilarity(_ a: String, _ b: String) -> Double {
-        let jaccard = jaccardSimilarity(Set(tokens(from: a)), Set(tokens(from: b)))
-        return (0.65 * normalizedLevenshteinSimilarity(a, b)) + (0.35 * jaccard)
-    }
-
-    private static func tokens(from normalized: String) -> [String] {
-        normalized.split(separator: " ").map(String.init)
-    }
-
-    private static func jaccardSimilarity(_ a: Set<String>, _ b: Set<String>) -> Double {
-        guard !a.isEmpty || !b.isEmpty else { return 1.0 }
-        let intersection = Double(a.intersection(b).count)
-        let union = Double(a.union(b).count)
-        guard union > 0 else { return 0 }
-        return intersection / union
-    }
-
-    private static func normalizedLevenshteinSimilarity(_ a: String, _ b: String) -> Double {
-        let distance = levenshteinDistance(Array(a), Array(b))
-        let maxLen = max(a.count, b.count)
-        guard maxLen > 0 else { return 1.0 }
-        return 1.0 - (Double(distance) / Double(maxLen))
-    }
-
-    private static func levenshteinDistance(_ a: [Character], _ b: [Character]) -> Int {
-        if a.isEmpty { return b.count }
-        if b.isEmpty { return a.count }
-
-        var previous = Array(0 ... b.count)
-        var current = Array(repeating: 0, count: b.count + 1)
-
-        for i in 1 ... a.count {
-            current[0] = i
-            for j in 1 ... b.count {
-                let cost = a[i - 1] == b[j - 1] ? 0 : 1
-                current[j] = min(
-                    previous[j] + 1, // deletion
-                    current[j - 1] + 1, // insertion
-                    previous[j - 1] + cost // substitution
-                )
-            }
-            swap(&previous, &current)
-        }
-
-        return previous[b.count]
+        TrackTitleFingerprint.stringSimilarity(normalize(a), normalize(b))
     }
 }

@@ -46,7 +46,7 @@ struct DuplicateReviewCard: View {
                     .textSelection(.enabled)
             }
 
-            Text("Match confidence: \(item.match.confidence.rawValue.capitalized)")
+            Text("\(item.match.reason) · \(item.match.confidence.rawValue.capitalized) confidence")
             .font(.caption)
             .foregroundStyle(.secondary)
 

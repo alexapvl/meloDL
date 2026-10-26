@@ -59,6 +59,8 @@ private struct SessionSidebar: View {
     @State private var isSettingsHovered = false
     @State private var isFormatHovered = false
     @State private var isDestinationHovered = false
+    @State private var isGenreHovered = false
+    @ObservedObject private var rekordboxLibrary = RekordboxLibraryStore.shared
     @State private var sessionPendingDeletion: DownloadSession?
     @State private var isShowingDeleteConfirmation = false
 
@@ -359,6 +361,48 @@ private struct SessionSidebar: View {
                     .stroke(Color.secondary.opacity(0.16), lineWidth: 1)
             }
             .padding(.horizontal, 6)
+
+            if coordinator.isRekordboxGenreAvailable(for: appSettings.format) {
+                genreMenu
+                    .padding(.horizontal, 6)
+            }
+        }
+    }
+
+    private var genreMenu: some View {
+        GenreMenu(
+            genres: rekordboxLibrary.genres,
+            selection: coordinator.draftGenre,
+            inheritedGenre: appSettings.rekordboxDefaultGenre,
+            onSelect: { coordinator.draftGenre = $0 }
+        ) {
+            HStack(spacing: 6) {
+                Image(systemName: "tag")
+                    .font(.caption.weight(.semibold))
+                Text(draftGenreTitle)
+                    .font(.caption.weight(.semibold))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            .foregroundStyle(coordinator.draftGenre == nil ? (isGenreHovered ? .primary : Color.secondary) : Color.accentColor)
+            .padding(.horizontal, 6)
+            .frame(height: 24)
+            .background(isGenreHovered ? Color.primary.opacity(0.08) : .clear, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .contentShape(.rect)
+        }
+        .fixedSize()
+        .onHover { isGenreHovered = $0 }
+        .help("Rekordbox genre for the next session")
+    }
+
+    private var draftGenreTitle: String {
+        switch coordinator.draftGenre {
+        case nil:
+            return appSettings.rekordboxDefaultGenre.isEmpty ? "Genre" : "Genre: \(appSettings.rekordboxDefaultGenre)"
+        case "":
+            return "No genre"
+        case let genre?:
+            return genre
         }
     }
 
@@ -604,6 +648,8 @@ private struct SessionDetailPane: View {
     @State private var isConfirmingSkipRemaining = false
     @State private var didCopyURL = false
     @State private var hiddenReviewSessionIDs: Set<UUID> = []
+    @ObservedObject private var rekordboxLibrary = RekordboxLibraryStore.shared
+    @ObservedObject private var rekordboxXMLQueue = RekordboxXMLQueue.shared
 
     var body: some View {
         if let session {
@@ -731,11 +777,112 @@ private struct SessionDetailPane: View {
                     .meloBorderedButton()
                 }
 
+                if showsRekordboxImport(for: session) {
+                    rekordboxImportButton(for: session)
+                }
+
                 ConfirmingDeleteButton(isConfirming: $isRemoveConfirming) {
                     coordinator.removeSession(session.id)
                 }
             }
+
+            if let activity = coordinator.rekordboxImportActivity[session.id] {
+                rekordboxActivityLabel(activity, sessionID: session.id)
+            }
         }
+    }
+
+    private func showsRekordboxImport(for session: DownloadSession) -> Bool {
+        coordinator.isRekordboxGenreAvailable(for: session.format) && session.firstExistingCompletedFilePath != nil
+    }
+
+    @ViewBuilder
+    private func rekordboxImportButton(for session: DownloadSession) -> some View {
+        let pendingCount = coordinator.rekordboxPendingItems(in: session).count
+        if pendingCount == 0 {
+            let isWaiting = session.items.contains(where: coordinator.isWaitingInRekordboxXML)
+            Label(isWaiting ? "In Rekordbox XML" : "In Rekordbox", systemImage: isWaiting ? "tray.and.arrow.down" : "checkmark.circle")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 4)
+                .help(isWaiting ? "Waiting in meloDL's Rekordbox XML. Import from the rekordbox xml node in Rekordbox's sidebar." : "")
+        } else {
+            let canDrive = RekordboxImporter.shared.canDriveRekordbox
+            Button {
+                coordinator.importToRekordbox(sessionID: session.id)
+            } label: {
+                Label(
+                    canDrive
+                        ? (pendingCount == 1 ? "Import to Rekordbox" : "Import \(pendingCount) to Rekordbox")
+                        : "Add \(pendingCount) to Rekordbox XML",
+                    systemImage: "square.and.arrow.down.on.square"
+                )
+            }
+            .meloBorderedButton()
+            .disabled(coordinator.isRekordboxBusy)
+            .help(canDrive
+                ? "Adds the tracks to your Rekordbox collection with their genres. Rekordbox needs to be open and comes to the front for a few seconds. Don't use the mouse or keyboard until it's done."
+                : "meloDL can't control Rekordbox without Accessibility access, so it writes the tracks to meloDL's Rekordbox XML. See Settings > Rekordbox.")
+        }
+    }
+
+    private func rekordboxActivityLabel(_ activity: RekordboxImportActivity, sessionID: UUID) -> some View {
+        HStack(spacing: 8) {
+            switch activity {
+            case .importing(let count):
+                ProgressView()
+                    .controlSize(.small)
+                Text("Importing \(count == 1 ? "1 track" : "\(count) tracks") into Rekordbox. Don't use the mouse or keyboard until it's done.")
+            case .removingPlaylist:
+                ProgressView()
+                    .controlSize(.small)
+                Text("Removing the playlist Rekordbox made for the import.")
+            case .refreshing:
+                ProgressView()
+                    .controlSize(.small)
+                Text("Checking your Rekordbox collection.")
+            case .finished(let imported, let leftoverPlaylist):
+                Image(systemName: "checkmark.circle")
+                    .foregroundStyle(.green)
+                Text(
+                    (imported == 1 ? "Imported 1 track into Rekordbox." : "Imported \(imported) tracks into Rekordbox.")
+                        + (leftoverPlaylist.map { " meloDL couldn't safely remove the playlist \"\($0)\", so delete it in Rekordbox if you don't need it." } ?? "")
+                )
+                .fixedSize(horizontal: false, vertical: true)
+            case .addedToXML(let count, let note):
+                Image(systemName: "tray.and.arrow.down")
+                    .foregroundStyle(Color.accentColor)
+                Text(SettingsPathLink.linkify(
+                    [note, "Added \(count == 1 ? "1 track" : "\(count) tracks") to meloDL's Rekordbox XML. In Rekordbox, refresh the rekordbox xml node in the sidebar, select its tracks and choose Import To Collection. Setup steps are in Settings > Rekordbox."]
+                        .compactMap { $0 }
+                        .joined(separator: " ")
+                ))
+                .fixedSize(horizontal: false, vertical: true)
+            case .failed(let message):
+                Image(systemName: "exclamationmark.triangle")
+                    .foregroundStyle(.orange)
+                Text(SettingsPathLink.linkify(message))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if !activity.isRunning {
+                Button {
+                    coordinator.dismissRekordboxImportActivity(for: sessionID)
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 16, height: 16)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .pointerStyle(.link)
+                .help("Dismiss")
+                .accessibilityLabel("Dismiss")
+            }
+        }
+        .font(.callout)
+        .foregroundStyle(.secondary)
     }
 
     private func trimEditorOverlay(target: TrimTarget) -> some View {
@@ -887,8 +1034,27 @@ private struct SessionDetailPane: View {
                 reviewBanner(for: session)
             }
 
-            Text(session.kind == .playlist ? "Tracks" : "Download")
-                .font(.title3.weight(.semibold))
+            HStack {
+                Text(session.kind == .playlist ? "Tracks" : "Download")
+                    .font(.title3.weight(.semibold))
+
+                Spacer(minLength: 12)
+
+                if session.items.count > 1 && !coordinator.rekordboxPendingItems(in: session).isEmpty {
+                    GenreMenu(
+                        genres: rekordboxLibrary.genres,
+                        selection: nil,
+                        inheritedGenre: session.genre ?? appSettings.rekordboxDefaultGenre,
+                        onSelect: { coordinator.setGenreForPendingItems($0, in: session.id) }
+                    ) {
+                        Label("Set genre for all", systemImage: "tag")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
+                    .fixedSize()
+                    .disabled(isRekordboxImportRunning(session.id))
+                }
+            }
 
             LazyVStack(spacing: 0) {
                 let sortedItems = session.items.sorted { $0.itemIndex < $1.itemIndex }
@@ -908,7 +1074,8 @@ private struct SessionDetailPane: View {
                         SessionItemRow(
                             item: item,
                             trimTarget: coordinator.makeTrimTarget(forFileAt: item.outputFilePath, title: item.title, in: session.id),
-                            onTrim: coordinator.openTrimEditor
+                            onTrim: coordinator.openTrimEditor,
+                            rekordbox: rekordboxState(for: item, in: session)
                         )
                         if item.id != lastItemID {
                             Divider()
@@ -923,6 +1090,26 @@ private struct SessionDetailPane: View {
                     .stroke(SessionTheme.cardStroke, lineWidth: 1)
             }
         }
+    }
+
+    private func rekordboxState(for item: DownloadSessionItem, in session: DownloadSession) -> SessionItemRekordboxState? {
+        guard coordinator.isRekordboxGenreAvailable(for: session.format),
+              item.status == .completed,
+              let path = item.outputFilePath,
+              FileManager.default.fileExists(atPath: path) else { return nil }
+        return SessionItemRekordboxState(
+            isInRekordbox: coordinator.isInRekordbox(item),
+            isWaitingInXML: coordinator.isWaitingInRekordboxXML(item),
+            genres: rekordboxLibrary.genres,
+            selection: item.genre,
+            inheritedGenre: session.genre ?? appSettings.rekordboxDefaultGenre,
+            isLocked: isRekordboxImportRunning(session.id),
+            onSelect: { coordinator.setGenre($0, forItem: item.id, in: session.id) }
+        )
+    }
+
+    private func isRekordboxImportRunning(_ sessionID: UUID) -> Bool {
+        coordinator.rekordboxImportActivity[sessionID]?.isRunning == true
     }
 
     private func emptyItemListStatusText(for session: DownloadSession) -> String {
@@ -979,10 +1166,63 @@ private struct SessionDetailPane: View {
     }
 }
 
+/// Looks like the bordered buttons next to it, so the genre reads as something to click.
+private struct GenreMenuButtonLabel: View {
+    let genre: String
+    @Environment(\.isEnabled) private var isEnabled
+    @State private var isHovered = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "tag")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Text(genre.isEmpty ? "Add genre" : genre)
+                .foregroundStyle(genre.isEmpty ? Color.secondary : .primary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: 140, alignment: .leading)
+                .fixedSize()
+            Image(systemName: "chevron.down")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(.secondary)
+        }
+        .font(.callout.weight(.medium))
+        .padding(.horizontal, 10)
+        .frame(height: 30)
+        .background(
+            Color.primary.opacity(isHovered && isEnabled ? 0.08 : 0.06),
+            in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .stroke(Color.secondary.opacity(0.18), lineWidth: 1)
+        }
+        .opacity(isEnabled ? 1 : 0.55)
+        .contentShape(.rect)
+        .onHover { isHovered = $0 }
+    }
+}
+
+private struct SessionItemRekordboxState {
+    let isInRekordbox: Bool
+    let isWaitingInXML: Bool
+    let genres: [String]
+    let selection: String?
+    let inheritedGenre: String
+    let isLocked: Bool
+    let onSelect: (String?) -> Void
+
+    var effectiveGenre: String {
+        selection ?? inheritedGenre
+    }
+}
+
 private struct SessionItemRow: View {
     let item: DownloadSessionItem
     let trimTarget: TrimTarget?
     let onTrim: (TrimTarget) -> Void
+    let rekordbox: SessionItemRekordboxState?
 
     var body: some View {
         HStack(spacing: 10) {
@@ -992,17 +1232,52 @@ private struct SessionItemRow: View {
                 .frame(width: 18)
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(item.title)
+                Text(displayTitle)
                     .font(.callout.weight(.medium))
                     .lineLimit(1)
-                ShimmeringStatusText(
-                    text: detailText,
-                    font: .caption,
-                    isAnimated: item.status == .downloading
-                )
+                    .truncationMode(.middle)
+                    .help(displayTitle)
+                HStack(spacing: 6) {
+                    ShimmeringStatusText(
+                        text: detailText,
+                        font: .caption,
+                        isAnimated: item.status == .downloading
+                    )
+                    .fixedSize()
+
+                    if let rekordbox, rekordbox.isInRekordbox || rekordbox.isWaitingInXML {
+                        Text("·")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                        Label(
+                            rekordbox.isInRekordbox ? "In Rekordbox" : "In Rekordbox XML",
+                            systemImage: rekordbox.isInRekordbox ? "checkmark" : "tray.and.arrow.down"
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .labelStyle(.titleAndIcon)
+                        .help(rekordbox.isInRekordbox
+                            ? "This file is in your Rekordbox collection."
+                            : "Waiting in meloDL's Rekordbox XML for you to import it in Rekordbox.")
+                    }
+                }
             }
 
-            Spacer()
+            Spacer(minLength: 12)
+
+            if let rekordbox, !rekordbox.isInRekordbox, !rekordbox.isWaitingInXML {
+                GenreMenu(
+                    genres: rekordbox.genres,
+                    selection: rekordbox.selection,
+                    inheritedGenre: rekordbox.inheritedGenre,
+                    onSelect: rekordbox.onSelect
+                ) {
+                    GenreMenuButtonLabel(genre: rekordbox.effectiveGenre)
+                }
+                .fixedSize()
+                .disabled(rekordbox.isLocked)
+                .help("Rekordbox genre for this track")
+            }
 
             if let path = existingOutputPath {
                 if let trimTarget {
@@ -1066,6 +1341,12 @@ private struct SessionItemRow: View {
                 }
             }
         }
+    }
+
+    /// Single-link sessions keep the URL as the title, so the downloaded file name reads better.
+    private var displayTitle: String {
+        guard item.title.hasPrefix("http"), let path = item.outputFilePath else { return item.title }
+        return URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
     }
 
     private var existingOutputPath: String? {

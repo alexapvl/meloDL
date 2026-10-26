@@ -52,6 +52,11 @@ struct SettingsView: View {
                 .frame(width: 0, height: 0)
         }
         .frame(minWidth: 820, idealWidth: 900, minHeight: 600, idealHeight: 640)
+        .environment(\.openURL, OpenURLAction { url in
+            guard let destination = SettingsPathLink.destination(for: url) else { return .systemAction }
+            selectDestination(destination)
+            return .handled
+        })
         .onAppear { indexingViewModel.onAppear() }
         .onDisappear { indexingViewModel.onDisappear() }
         .onExitCommand(perform: onDismiss)
@@ -166,6 +171,8 @@ struct SettingsView: View {
             BehaviorSettingsView(appSettings: appSettings)
         case .spotify:
             SpotifySettingsView()
+        case .rekordbox:
+            RekordboxSettingsView(appSettings: appSettings, viewModel: indexingViewModel)
         case .indexing:
             IndexingSettingsView(appSettings: appSettings, viewModel: indexingViewModel)
         case .duplicates:
@@ -238,6 +245,7 @@ enum SettingsDestination: String, CaseIterable {
     case downloads
     case behavior
     case spotify
+    case rekordbox
     case indexing
     case duplicates
     case updates
@@ -253,6 +261,7 @@ enum SettingsDestination: String, CaseIterable {
         case .downloads: return "Downloads"
         case .behavior: return "Behavior"
         case .spotify: return "Spotify"
+        case .rekordbox: return "Rekordbox"
         case .indexing: return "Indexing"
         case .duplicates: return "Duplicates"
         case .updates: return "Updates"
@@ -270,6 +279,7 @@ enum SettingsDestination: String, CaseIterable {
         case .downloads: return "arrow.down.circle"
         case .behavior: return "switch.2"
         case .spotify: return "music.note.list"
+        case .rekordbox: return "opticaldisc"
         case .indexing: return "magnifyingglass"
         case .duplicates: return "doc.on.doc"
         case .updates: return "arrow.triangle.2.circlepath"
@@ -823,6 +833,590 @@ struct SpotifySettingsView: View {
     }
 }
 
+struct RekordboxSettingsView: View {
+    @ObservedObject var appSettings: AppSettings
+    @ObservedObject var viewModel: IndexingSettingsViewModel
+    @ObservedObject private var rekordboxLibrary = RekordboxLibraryStore.shared
+    @ObservedObject private var xmlQueue = RekordboxXMLQueue.shared
+    @StateObject private var missingTracks: RekordboxMissingTracksViewModel
+
+    init(appSettings: AppSettings, viewModel: IndexingSettingsViewModel) {
+        self.appSettings = appSettings
+        self.viewModel = viewModel
+        _missingTracks = StateObject(wrappedValue: RekordboxMissingTracksViewModel(appSettings: appSettings))
+    }
+    @State private var hasAccessibilityAccess = AXIsProcessTrusted()
+    @State private var automationPermission: AutomationPermission = .unknown
+    @State private var hasScreenRecordingAccess = CGPreflightScreenCaptureAccess()
+
+    var body: some View {
+        SettingsPage(title: "Rekordbox", subtitle: "Check downloads against your collection and import them with a genre.") {
+            VStack(alignment: .leading, spacing: SettingsLayout.pageSpacing) {
+                SettingsSection(title: "Collection") {
+                    SettingsRow(title: "Collection import", description: collectionDescription) {
+                        HStack(spacing: 8) {
+                            if viewModel.isRefreshingRekordbox {
+                                ProgressView()
+                                    .controlSize(.small)
+                                    .padding(.horizontal, 6)
+                            } else {
+                                Button("Refresh Now") {
+                                    viewModel.refreshRekordboxFromApp()
+                                }
+                                .meloBorderedButton()
+                                .disabled(viewModel.isIndexing)
+                                .help("Has the open Rekordbox app export its collection for meloDL. Rekordbox comes to the front for a few seconds.")
+                            }
+
+                            Button("Import XML...") {
+                                viewModel.importRekordboxXMLUsingPanel()
+                            }
+                            .meloBorderedButton()
+                            .disabled(viewModel.isIndexing || viewModel.isRefreshingRekordbox)
+                            .help("Pick a file you exported with File > Export Collection in xml format in Rekordbox.")
+
+                            if viewModel.isRekordboxAssistActive {
+                                Button("Clear") {
+                                    viewModel.clearRekordboxImport()
+                                }
+                                .meloBorderedButton()
+                                .disabled(viewModel.isRefreshingRekordbox)
+                            }
+                        }
+                    }
+                }
+
+                if viewModel.isRekordboxAssistActive {
+                    SettingsSection(title: "Import into Rekordbox") {
+                        SettingsTextBlock(text: "Pick a genre before downloading in the sidebar, or per track in a session, then use Import to Rekordbox in the session. Rekordbox needs to be open and set to English, and comes to the front while meloDL imports.")
+
+                        SettingsDivider()
+
+                        SettingsRow(
+                            title: "Default genre",
+                            description: "Used for downloads that don't get a genre."
+                        ) {
+                            defaultGenreMenu
+                        }
+
+                        SettingsDivider()
+
+                        SettingsToggleRow(
+                            title: "Keep a playlist of each import",
+                            description: "Rekordbox makes a playlist when importing several tracks at once. meloDL removes it unless this is on, and then names it after the session.",
+                            isOn: $appSettings.rekordboxKeepsImportPlaylist
+                        )
+                    }
+                }
+
+                if viewModel.isRekordboxAssistActive {
+                    SettingsSection(title: "Rekordbox XML") {
+                        SettingsRow(
+                            title: "meloDL's XML file",
+                            description: "Set this file once in Rekordbox under Preferences > Advanced > Database > rekordbox xml. Its tracks then show under rekordbox xml in Rekordbox's sidebar."
+                        ) {
+                            HStack(spacing: 8) {
+                                Button("Copy Path") {
+                                    NSPasteboard.general.clearContents()
+                                    NSPasteboard.general.setString(RekordboxXMLQueue.xmlURL.path, forType: .string)
+                                }
+                                .meloBorderedButton()
+
+                                Button("Show in Finder") {
+                                    NSWorkspace.shared.activateFileViewerSelecting([RekordboxXMLQueue.xmlURL])
+                                }
+                                .meloBorderedButton()
+                            }
+                        }
+
+                        SettingsDivider()
+
+                        SettingsRow(title: waitingTitle, description: waitingDescription) {
+                            if !xmlQueue.tracks.isEmpty {
+                                Button("Clear") {
+                                    xmlQueue.removeAll()
+                                }
+                                .meloBorderedButton()
+                                .help("Removes all tracks from meloDL's XML. Nothing changes in Rekordbox.")
+                            }
+                        }
+                    }
+
+                    RekordboxMissingTracksSection(
+                        appSettings: appSettings,
+                        viewModel: missingTracks,
+                        genres: rekordboxLibrary.genres
+                    )
+                }
+
+                SettingsSection(title: "Permissions") {
+                    SettingsRow(
+                        title: "Accessibility",
+                        description: hasAccessibilityAccess
+                            ? "Allowed. meloDL can use Rekordbox's File menu."
+                            : "Needed to use Rekordbox's File menu for exporting and importing."
+                    ) {
+                        if hasAccessibilityAccess {
+                            Image(systemName: "checkmark.circle")
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Button("Open System Settings") {
+                                openPrivacySettings("Privacy_Accessibility")
+                            }
+                            .meloBorderedButton()
+                        }
+                    }
+
+                    SettingsDivider()
+
+                    SettingsRow(
+                        title: "Screen Recording",
+                        description: hasScreenRecordingAccess
+                            ? "Allowed. meloDL reads Rekordbox's window to find and remove the import playlist."
+                            : "Lets meloDL read Rekordbox's window to find and remove the playlist an import leaves behind. Without it, imports still work and the playlist stays. macOS may ask you to reopen meloDL after allowing it."
+                    ) {
+                        if hasScreenRecordingAccess {
+                            Image(systemName: "checkmark.circle")
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Button("Allow...") {
+                                if !CGRequestScreenCaptureAccess() {
+                                    openPrivacySettings("Privacy_ScreenCapture")
+                                }
+                                hasScreenRecordingAccess = CGPreflightScreenCaptureAccess()
+                            }
+                            .meloBorderedButton()
+                        }
+                    }
+
+                    SettingsDivider()
+
+                    SettingsRow(title: "Automation", description: automationDescription) {
+                        switch automationPermission {
+                        case .granted:
+                            Image(systemName: "checkmark.circle")
+                                .foregroundStyle(.secondary)
+                        case .notDetermined:
+                            Button("Allow...") {
+                                Task {
+                                    automationPermission = await RekordboxAutomationService.shared.systemEventsPermission(ask: true)
+                                }
+                            }
+                            .meloBorderedButton()
+                        case .denied, .unknown:
+                            Button("Open System Settings") {
+                                openPrivacySettings("Privacy_Automation")
+                            }
+                            .meloBorderedButton()
+                        }
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .task {
+            await refreshAutomationPermission()
+        }
+        .task {
+            await missingTracks.load()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            hasAccessibilityAccess = AXIsProcessTrusted()
+            hasScreenRecordingAccess = CGPreflightScreenCaptureAccess()
+            Task { await refreshAutomationPermission() }
+        }
+    }
+
+    private var automationDescription: String {
+        switch automationPermission {
+        case .granted:
+            return "Allowed. meloDL can control System Events."
+        case .denied:
+            return "Denied. Turn on System Events under meloDL in System Settings."
+        case .notDetermined, .unknown:
+            return "Needed to control System Events, which presses Rekordbox's menus."
+        }
+    }
+
+    private func refreshAutomationPermission() async {
+        automationPermission = await RekordboxAutomationService.shared.systemEventsPermission(ask: false)
+    }
+
+    private var waitingTitle: String {
+        switch xmlQueue.tracks.count {
+        case 0: return "No tracks waiting"
+        case 1: return "1 track waiting"
+        case let count: return "\(count) tracks waiting"
+        }
+    }
+
+    private var waitingDescription: String {
+        if xmlQueue.tracks.isEmpty {
+            return "Tracks you add to the XML wait here until they're in your collection."
+        }
+        return "In Rekordbox, refresh the rekordbox xml node in the sidebar, select its tracks and choose Import To Collection. Then press Refresh Now above, and imported tracks leave this list."
+    }
+
+    private var collectionDescription: String {
+        if let status = viewModel.rekordboxIndexingStatusText {
+            return status
+        }
+        return "Refresh Now exports the collection from the open Rekordbox app. Import XML loads a file you exported yourself with File > Export Collection in xml format."
+    }
+
+    private var defaultGenreMenu: some View {
+        GenreMenu(
+            genres: rekordboxLibrary.genres,
+            selection: appSettings.rekordboxDefaultGenre,
+            inheritedGenre: nil,
+            onSelect: { appSettings.rekordboxDefaultGenre = $0 ?? "" }
+        ) {
+            HStack(spacing: 6) {
+                Text(appSettings.rekordboxDefaultGenre.isEmpty ? "No genre" : appSettings.rekordboxDefaultGenre)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 24)
+            .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .contentShape(.rect)
+        }
+        .fixedSize()
+    }
+
+    private func openPrivacySettings(_ anchor: String) {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(anchor)") else { return }
+        NSWorkspace.shared.open(url)
+    }
+}
+
+/// Indexed tracks missing from the Rekordbox collection, grouped by folder.
+private struct RekordboxMissingTracksSection: View {
+    @ObservedObject var appSettings: AppSettings
+    @ObservedObject var viewModel: RekordboxMissingTracksViewModel
+    let genres: [String]
+    @State private var expandedFolders: Set<String> = []
+    @State private var isShowingIgnored = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: SettingsLayout.sectionSpacing) {
+            HStack(alignment: .firstTextBaseline) {
+                SettingsSectionTitle(text: "Not in Rekordbox")
+                Spacer()
+                Text(viewModel.missingCount == 1 ? "1 track" : "\(viewModel.missingCount) tracks")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+
+            Text("Tracks in your indexed folders that aren't in your Rekordbox collection. Select some to import them, or ignore folders that don't belong in Rekordbox.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 12) {
+                TextField("Search", text: $viewModel.searchText)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: 240)
+                Spacer()
+                Toggle("Include Apple Music library", isOn: $appSettings.rekordboxIncludesAppleMusicLibrary)
+                    .toggleStyle(.checkbox)
+                    .font(.callout)
+            }
+
+            SettingsCard {
+                if viewModel.isLoading && viewModel.folders.isEmpty {
+                    SettingsTextBlock(text: "Loading indexed tracks…")
+                } else if viewModel.folders.isEmpty {
+                    SettingsTextBlock(text: viewModel.searchText.isEmpty
+                        ? "Every indexed track is in Rekordbox or waiting in the XML."
+                        : "No tracks match your search.")
+                } else {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(viewModel.folders) { folder in
+                            if folder.id != viewModel.folders.first?.id {
+                                SettingsDivider()
+                            }
+                            folderRow(folder)
+                            if expandedFolders.contains(folder.path) {
+                                ForEach(folder.tracks) { track in
+                                    trackRow(track)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            actionBar
+            importStatus
+
+            if !viewModel.ignoredFolders.isEmpty {
+                ignoredList
+            }
+        }
+    }
+
+    private var actionBar: some View {
+        HStack(spacing: 8) {
+            Text(viewModel.selection.isEmpty ? "None selected" : "\(viewModel.selection.count) selected")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+
+            Button(viewModel.selection.isEmpty ? "Select All" : "Clear") {
+                if viewModel.selection.isEmpty {
+                    viewModel.selectAll()
+                } else {
+                    viewModel.clearSelection()
+                }
+            }
+            .buttonStyle(.link)
+            .font(.callout)
+            .disabled(viewModel.folders.isEmpty)
+
+            Spacer()
+
+            GenreMenu(
+                genres: genres,
+                selection: viewModel.genre,
+                inheritedGenre: appSettings.rekordboxDefaultGenre,
+                onSelect: { viewModel.genre = $0 }
+            ) {
+                HStack(spacing: 6) {
+                    Image(systemName: "tag")
+                        .foregroundStyle(.secondary)
+                    Text(genreTitle)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(.secondary)
+                }
+                .font(.callout.weight(.medium))
+                .padding(.horizontal, 10)
+                .frame(height: 30)
+                .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .stroke(Color.secondary.opacity(0.18), lineWidth: 1)
+                }
+                .contentShape(.rect)
+            }
+            .fixedSize()
+            .help("Genre for the selected tracks")
+
+            Button(viewModel.selection.isEmpty ? "Import to Rekordbox" : "Import \(viewModel.selection.count) to Rekordbox") {
+                viewModel.importSelection()
+            }
+            .meloBorderedButton()
+            .disabled(viewModel.selection.isEmpty || viewModel.isImporting)
+            .help("Rekordbox needs to be open and comes to the front for a few seconds. Without Accessibility access, the tracks go to meloDL's Rekordbox XML instead.")
+        }
+    }
+
+    @ViewBuilder
+    private var importStatus: some View {
+        if let activity = viewModel.importActivity {
+            HStack(spacing: 8) {
+                switch activity {
+                case .importing(let count):
+                    ProgressView().controlSize(.small)
+                    Text("Importing \(count == 1 ? "1 track" : "\(count) tracks") into Rekordbox. Don't use the mouse or keyboard until it's done.")
+                case .removingPlaylist:
+                    ProgressView().controlSize(.small)
+                    Text("Removing the playlist Rekordbox made for the import.")
+                case .refreshing:
+                    ProgressView().controlSize(.small)
+                    Text("Checking your Rekordbox collection.")
+                case .finished(let imported, let leftoverPlaylist):
+                    Image(systemName: "checkmark.circle").foregroundStyle(.green)
+                    Text((imported == 1 ? "Imported 1 track." : "Imported \(imported) tracks.")
+                        + (leftoverPlaylist.map { " The playlist \"\($0)\" stayed in Rekordbox; delete it there if you don't need it." } ?? ""))
+                case .addedToXML(let count, let note):
+                    Image(systemName: "tray.and.arrow.down").foregroundStyle(Color.accentColor)
+                    Text([note, "Added \(count == 1 ? "1 track" : "\(count) tracks") to meloDL's Rekordbox XML instead."].compactMap { $0 }.joined(separator: " "))
+                case .failed(let message):
+                    Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange)
+                    Text(message)
+                }
+                Spacer(minLength: 0)
+                if !activity.isRunning {
+                    Button {
+                        viewModel.dismissImportActivity()
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Dismiss")
+                }
+            }
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var genreTitle: String {
+        switch viewModel.genre {
+        case nil:
+            return appSettings.rekordboxDefaultGenre.isEmpty ? "Genre" : appSettings.rekordboxDefaultGenre
+        case "":
+            return "No genre"
+        case let genre?:
+            return genre
+        }
+    }
+
+    private func folderRow(_ folder: RekordboxMissingTracksViewModel.Folder) -> some View {
+        let isExpanded = expandedFolders.contains(folder.path)
+        let selectedCount = folder.tracks.filter { viewModel.selection.contains($0.path) }.count
+        return HStack(spacing: 10) {
+            Button {
+                viewModel.toggle(folder)
+            } label: {
+                Image(systemName: selectedCount == 0 ? "square" : selectedCount == folder.tracks.count ? "checkmark.square.fill" : "minus.square.fill")
+                    .foregroundStyle(selectedCount == 0 ? Color.secondary : .accentColor)
+                    .font(.body)
+            }
+            .buttonStyle(.plain)
+            .pointerStyle(.link)
+            .accessibilityLabel("Select folder")
+
+            Button {
+                if isExpanded {
+                    expandedFolders.remove(folder.path)
+                } else {
+                    expandedFolders.insert(folder.path)
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text((folder.path as NSString).lastPathComponent)
+                            .font(.callout.weight(.medium))
+                            .lineLimit(1)
+                        Text((folder.path as NSString).abbreviatingWithTildeInPath)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    Spacer(minLength: 8)
+                    Text("\(folder.tracks.count)")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+                .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+
+            Menu {
+                Button("Ignore Folder") {
+                    viewModel.ignore(folder: folder)
+                }
+                Button("Show in Finder") {
+                    NSWorkspace.shared.open(URL(fileURLWithPath: folder.path, isDirectory: true))
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .foregroundStyle(.secondary)
+                    .frame(width: 22, height: 22)
+                    .contentShape(.rect)
+            }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("Folder actions")
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+    }
+
+    private func trackRow(_ track: RekordboxMissingTracksViewModel.Track) -> some View {
+        let isSelected = viewModel.selection.contains(track.path)
+        return HStack(spacing: 10) {
+            Image(systemName: isSelected ? "checkmark.square.fill" : "square")
+                .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(track.name)
+                    .font(.callout)
+                    .lineLimit(1)
+                if let artist = track.artist {
+                    Text(artist)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: 8)
+            if let duration = track.durationSec {
+                Text(Duration.seconds(duration).formatted(.time(pattern: .minuteSecond)))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+        }
+        .padding(.leading, 48)
+        .padding(.trailing, 16)
+        .padding(.vertical, 6)
+        .contentShape(.rect)
+        .onTapGesture { viewModel.toggle(track) }
+        .contextMenu {
+            Button("Ignore Track") {
+                viewModel.ignore(track: track)
+            }
+            Button("Show in Finder") {
+                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: track.path)])
+            }
+        }
+    }
+
+    private var ignoredList: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button {
+                isShowingIgnored.toggle()
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .rotationEffect(.degrees(isShowingIgnored ? 90 : 0))
+                    Text("Ignored (\(viewModel.ignoredFolders.reduce(0) { $0 + $1.tracks.count }) tracks)")
+                }
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+
+            if isShowingIgnored {
+                SettingsCard {
+                    ForEach(viewModel.ignoredFolders) { folder in
+                        if folder.id != viewModel.ignoredFolders.first?.id {
+                            SettingsDivider()
+                        }
+                        SettingsRow(
+                            title: (folder.path as NSString).lastPathComponent,
+                            description: "\((folder.path as NSString).abbreviatingWithTildeInPath) · \(folder.tracks.count) tracks"
+                        ) {
+                            Button("Show Again") {
+                                viewModel.unignore(folder: folder)
+                            }
+                            .meloBorderedButton()
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 struct IndexingSettingsView: View {
     @ObservedObject var appSettings: AppSettings
     @ObservedObject var viewModel: IndexingSettingsViewModel
@@ -884,27 +1478,6 @@ struct IndexingSettingsView: View {
                     }
                 }
 
-                SettingsSection(title: "Rekordbox Library") {
-                    SettingsRow(
-                        title: "Collection import",
-                        description: rekordboxSectionDescription
-                    ) {
-                        HStack(spacing: 8) {
-                            Button("Import Rekordbox XML...") {
-                                viewModel.importRekordboxXMLUsingPanel()
-                            }
-                            .meloBorderedButton()
-                            .disabled(viewModel.isIndexing)
-
-                            if viewModel.isRekordboxAssistActive {
-                                Button("Clear Import") {
-                                    viewModel.clearRekordboxImport()
-                                }
-                                .meloBorderedButton()
-                            }
-                        }
-                    }
-                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -959,13 +1532,6 @@ struct IndexingSettingsView: View {
                 Text("")
             }
         }
-    }
-
-    private var rekordboxSectionDescription: String {
-        if let status = viewModel.rekordboxIndexingStatusText {
-            return status
-        }
-        return "In Rekordbox, go to File -> Export collection in xml format, then import that XML here."
     }
 
     private var lastIndexedText: String {
@@ -1055,7 +1621,7 @@ private struct DuplicatesSettingsView: View {
                 }
 
                 if !viewModel.isManualReviewMode && !viewModel.isRekordboxAssistActive {
-                    Text("Import your Rekordbox collection on the Indexing page to see which duplicates are already in your DJ library.")
+                    Text(SettingsPathLink.linkify("Load your Rekordbox collection in Settings > Rekordbox to see which duplicates are already in your DJ library."))
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }

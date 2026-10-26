@@ -33,6 +33,7 @@ final class IndexingSettingsViewModel: ObservableObject {
     @Published private(set) var rekordboxImportedTrackCount = 0
     @Published private(set) var rekordboxImportError: String?
     @Published private(set) var rekordboxSourceFilename: String?
+    @Published private(set) var isRefreshingRekordbox = false
     @Published var showManualSessionConfirmDialog = false
     @Published var showManualSessionCancelDialog = false
     @Published var showClearDataConfirmation = false
@@ -42,7 +43,6 @@ final class IndexingSettingsViewModel: ObservableObject {
     private let store: TrackIndexStore
     private let indexer: TrackIndexer
     private let duplicateDetectionService: DuplicateDetectionService
-    private let rekordboxImportService: RekordboxXMLImportService
     private let rekordboxLibraryStore: RekordboxLibraryStore
     private var pollingTask: Task<Void, Never>?
     private var pollingGeneration = 0
@@ -55,14 +55,12 @@ final class IndexingSettingsViewModel: ObservableObject {
         store: TrackIndexStore = .shared,
         indexer: TrackIndexer = .shared,
         duplicateDetectionService: DuplicateDetectionService = .shared,
-        rekordboxImportService: RekordboxXMLImportService = .shared,
         rekordboxLibraryStore: RekordboxLibraryStore = .shared
     ) {
         self.appSettings = appSettings
         self.store = store
         self.indexer = indexer
         self.duplicateDetectionService = duplicateDetectionService
-        self.rekordboxImportService = rekordboxImportService
         self.rekordboxLibraryStore = rekordboxLibraryStore
         syncRekordboxPublishedState()
     }
@@ -164,8 +162,7 @@ final class IndexingSettingsViewModel: ObservableObject {
         rekordboxImportError = nil
         Task {
             do {
-                let snapshot = try await rekordboxImportService.importSnapshot(from: fileURL)
-                try rekordboxLibraryStore.apply(snapshot: snapshot)
+                try await rekordboxLibraryStore.load(from: fileURL)
                 syncRekordboxPublishedState()
                 if isManualReviewMode {
                     refreshManualQueueFromCurrentGroups()
@@ -175,6 +172,26 @@ final class IndexingSettingsViewModel: ObservableObject {
                 try? rekordboxLibraryStore.clear()
                 syncRekordboxPublishedState()
             }
+        }
+    }
+
+    /// Has Rekordbox export its collection and loads it, without a manual export.
+    func refreshRekordboxFromApp() {
+        guard !isRefreshingRekordbox else { return }
+        rekordboxImportError = nil
+        isRefreshingRekordbox = true
+        Task {
+            do {
+                try await rekordboxLibraryStore.refreshFromRekordbox()
+                if isManualReviewMode {
+                    refreshManualQueueFromCurrentGroups()
+                }
+            } catch {
+                rekordboxImportError = error.localizedDescription
+            }
+            syncRekordboxPublishedState()
+            isRefreshingRekordbox = false
+            NSApplication.shared.activate(ignoringOtherApps: true)
         }
     }
 
@@ -554,7 +571,9 @@ final class IndexingSettingsViewModel: ObservableObject {
             from: NSNumber(value: rekordboxImportedTrackCount),
             number: .decimal
         )
-        return "\(trackCountText) tracks loaded from \(source). Used during download duplicate review and duplicate cleanup."
+        let loadedText = rekordboxLibraryStore.importedAt
+            .map { ", loaded \($0.formatted(date: .abbreviated, time: .shortened))" } ?? ""
+        return "\(trackCountText) tracks from \(source)\(loadedText). Used for duplicate checks and the genre list."
     }
 
     private var autoResolvableGroupCount: Int {

@@ -54,6 +54,21 @@ final class AppSettings: ObservableObject {
     @Published var showDuplicateReviewGestureTip: Bool {
         didSet { defaults.set(showDuplicateReviewGestureTip, forKey: Keys.showDuplicateReviewGestureTip) }
     }
+    /// Genre for tracks that got none before or after downloading. Empty means no genre.
+    @Published var rekordboxDefaultGenre: String {
+        didSet { defaults.set(rekordboxDefaultGenre, forKey: Keys.rekordboxDefaultGenre) }
+    }
+    /// Folders and files left out of the "Not in Rekordbox" list.
+    @Published var rekordboxIgnoredPaths: [String] {
+        didSet { defaults.set(rekordboxIgnoredPaths, forKey: Keys.rekordboxIgnoredPaths) }
+    }
+    @Published var rekordboxIncludesAppleMusicLibrary: Bool {
+        didSet { defaults.set(rekordboxIncludesAppleMusicLibrary, forKey: Keys.rekordboxIncludesAppleMusicLibrary) }
+    }
+    /// Keep the playlist Rekordbox makes when importing several tracks, instead of removing it.
+    @Published var rekordboxKeepsImportPlaylist: Bool {
+        didSet { defaults.set(rekordboxKeepsImportPlaylist, forKey: Keys.rekordboxKeepsImportPlaylist) }
+    }
 
     private let defaults: UserDefaults
 
@@ -157,6 +172,11 @@ final class AppSettings: ObservableObject {
         } else {
             showDuplicateReviewGestureTip = true
         }
+
+        rekordboxDefaultGenre = defaults.string(forKey: Keys.rekordboxDefaultGenre) ?? ""
+        rekordboxIgnoredPaths = defaults.stringArray(forKey: Keys.rekordboxIgnoredPaths) ?? []
+        rekordboxIncludesAppleMusicLibrary = defaults.bool(forKey: Keys.rekordboxIncludesAppleMusicLibrary)
+        rekordboxKeepsImportPlaylist = defaults.bool(forKey: Keys.rekordboxKeepsImportPlaylist)
     }
 
     var audioSettings: AudioSettings {
@@ -200,5 +220,9 @@ final class AppSettings: ObservableObject {
         static let duplicateIndexRoots = "settings.duplicateIndexRoots"
         static let onboardingCompleted = "settings.onboardingCompleted"
         static let showDuplicateReviewGestureTip = "settings.showDuplicateReviewGestureTip"
+        static let rekordboxDefaultGenre = "settings.rekordboxDefaultGenre"
+        static let rekordboxIgnoredPaths = "settings.rekordboxIgnoredPaths"
+        static let rekordboxIncludesAppleMusicLibrary = "settings.rekordboxIncludesAppleMusicLibrary"
+        static let rekordboxKeepsImportPlaylist = "settings.rekordboxKeepsImportPlaylist"
     }
 }
